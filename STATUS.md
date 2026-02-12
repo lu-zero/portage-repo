@@ -70,12 +70,21 @@ Only `FILESDIR` is set. Phase-execution variables like `WORKDIR`, `T`, `D`,
 build execution. Ebuilds that reference these at global scope may behave
 differently.
 
+### portage-metadata / portage-atom parsing gaps
+The metadata and dependency parsers reject several valid PMS constructs,
+causing ~2.5% of ebuilds to fail during `CacheEntry::parse()`. Issues include
+EAPI 9 support, USE dep defaults `(+)`/`(-)`, empty USE dep brackets `[]`,
+`=cat/pkg-ver*` glob atoms, negated SRC_URI conditionals, and others.
+
+See `../portage-metadata/ISSUES.md` for detailed descriptions and examples.
+
 ### brush-core parser bugs (upstream)
-Some ebuilds may fail to parse due to remaining brush-core/winnow bugs:
-- Heredoc handling edge cases (partially fixed)
-- IFS unset semantics (partially fixed)
+Some ebuilds may fail to parse due to remaining brush-core/winnow bugs.
+See `../brush/ISSUES.md` for detailed descriptions and reproducers.
+Remaining open issues:
+- `<<-` tab stripping inside command substitutions
+- Complex parameter expansion edge cases
 - Arithmetic expansion edge cases
-- Complex parameter expansion (`${var//pattern/replacement}`)
 
 Run `examples/regen_cache` against the full tree to discover remaining parser
 issues.
