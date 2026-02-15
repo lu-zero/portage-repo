@@ -41,7 +41,7 @@ const METADATA_VARS: &[&str] = &[
 /// The shell has standard bash builtins registered and eclass directories
 /// set up for the repository.
 ///
-/// See [PMS 7](https://projects.gentoo.org/pms/latest/pms.html#ebuilddefined-variables)
+/// See [PMS 7](https://projects.gentoo.org/pms/9/pms.html#ebuilddefined-variables)
 /// for the metadata variables extracted after sourcing an ebuild.
 pub struct EbuildShell {
     shell: Shell,
@@ -114,7 +114,7 @@ impl EbuildShell {
     ///    sourcing, line continuations, and nesting automatically
     /// 3. Extract metadata variables from the shell environment
     ///
-    /// See [PMS 7.2](https://projects.gentoo.org/pms/latest/pms.html#mandatory-ebuilddefined-variables).
+    /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
     pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<EbuildMetadata> {
         // Set PM-provided variables
         let category = ebuild.category();
@@ -181,7 +181,7 @@ impl EbuildShell {
     /// Variable assignments (with `${VAR}` expansion) are evaluated in the
     /// shell environment.
     ///
-    /// See [PMS 5.2.4](https://projects.gentoo.org/pms/latest/pms.html#makedefaults).
+    /// See [PMS 5.2.4](https://projects.gentoo.org/pms/9/pms.html#makedefaults).
     pub async fn source_make_defaults(&mut self, path: &Path) -> Result<()> {
         let params = self.shell.default_exec_params();
         self.shell

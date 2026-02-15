@@ -10,7 +10,7 @@ use crate::util;
 ///
 /// For example, `dev-lang/rust/` contains ebuild files like `rust-1.75.0.ebuild`.
 ///
-/// See [PMS 4](https://projects.gentoo.org/pms/latest/pms.html#tree-layout).
+/// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct Package {
     cpn: Cpn,

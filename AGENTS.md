@@ -28,7 +28,7 @@ cargo run --example enumerate_repo -- /path/to/repo  # Smoke-test the example
 
 ## PMS Compliance
 
-This library implements the [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/latest/pms.html).
+This library implements the [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/9/pms.html).
 All public types must reference the relevant PMS section in their doc comments
 (e.g. `See [PMS 4](...)`).
 

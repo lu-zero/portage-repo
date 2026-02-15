@@ -5,8 +5,8 @@
 //! Rather than implementing each as a Rust builtin, we define them as
 //! bash shell functions via [`brush_core::Shell::run_string`].
 //!
-//! See [PMS 11](https://projects.gentoo.org/pms/latest/pms.html#ebuild-phase-functions)
-//! and [PMS 12](https://projects.gentoo.org/pms/latest/pms.html#eclasses) for the
+//! See [PMS 10](https://projects.gentoo.org/pms/9/pms.html#eclasses)
+//! and [PMS 12](https://projects.gentoo.org/pms/9/pms.html#available-commands) for the
 //! functions an ebuild/eclass may call.
 
 use brush_core::{Shell, SourceInfo};
@@ -43,7 +43,7 @@ nonfatal() { "$@"; return 0; }
 
 # inherit: source eclasses, track INHERITED, manage ECLASS
 #
-# See PMS 12 — eclasses.
+# See PMS 10 — eclasses.
 # Eclass directories are communicated via the colon-separated
 # __PORTAGE_ECLASS_DIRS variable set by the Rust host.
 inherit() {
@@ -77,7 +77,7 @@ inherit() {
 
 # EXPORT_FUNCTIONS: create phase aliases for the current eclass
 #
-# See PMS 12 — EXPORT_FUNCTIONS.
+# See PMS 10 — EXPORT_FUNCTIONS.
 EXPORT_FUNCTIONS() {
     if [[ -z "${ECLASS}" ]]; then
         die "EXPORT_FUNCTIONS called outside eclass scope"

@@ -10,7 +10,7 @@ use crate::util;
 /// cache format, and profile format preferences.
 ///
 /// See [Repository format — layout.conf](https://wiki.gentoo.org/wiki/Repository_format/metadata/layout.conf)
-/// and [PMS 4](https://projects.gentoo.org/pms/latest/pms.html#tree-layout).
+/// and [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct LayoutConf {
     /// Master repositories this repository depends on (space-separated in file).

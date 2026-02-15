@@ -6,7 +6,7 @@
 [![dependency status](https://deps.rs/repo/github/lu-zero/portage-repo/status.svg)](https://deps.rs/repo/github/lu-zero/portage-repo)
 [![docs.rs](https://docs.rs/portage-repo/badge.svg)](https://docs.rs/portage-repo)
 
-A Rust library for reading Gentoo ebuild repository layouts, based on the [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/latest/pms.html).
+A Rust library for reading Gentoo ebuild repository layouts, based on the [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/9/pms.html).
 
 > **Warning**: This codebase was largely AI-generated (slop-coded) and has not
 > yet been thoroughly audited. It may contain bugs, incomplete PMS coverage, or

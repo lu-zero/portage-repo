@@ -15,7 +15,7 @@ use crate::util;
 /// This is the main entry point for the crate. It eagerly loads `layout.conf`
 /// and the repository name, while category/package enumeration is lazy.
 ///
-/// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/latest/pms.html#tree-layout).
+/// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct Repository {
     path: PathBuf,
@@ -63,7 +63,7 @@ impl Repository {
 
     /// List all categories declared in `profiles/categories`.
     ///
-    /// See [PMS 4](https://projects.gentoo.org/pms/latest/pms.html#tree-layout).
+    /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn categories(&self) -> Result<Vec<Category>> {
         let lines = util::read_lines(&self.path.join("profiles").join("categories"))?;
         Ok(lines
@@ -89,7 +89,7 @@ impl Repository {
     ///
     /// Reads from `metadata/md5-cache/{category}/{package-version}`.
     ///
-    /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/latest/pms.html#metadata-cache).
+    /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/9/pms.html#metadata-cache).
     pub fn cache_entry(&self, cpv: &Cpv) -> Result<CacheEntry> {
         let cache_path = self
             .path
@@ -102,7 +102,7 @@ impl Repository {
 
     /// Parse `profiles/profiles.desc` to get available profile descriptions.
     ///
-    /// See [PMS 5](https://projects.gentoo.org/pms/latest/pms.html#profiles).
+    /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
     pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc>> {
         let lines = util::read_lines(&self.path.join("profiles").join("profiles.desc"))?;
         let mut descs = Vec::new();

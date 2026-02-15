@@ -1,5 +1,5 @@
 //! Gentoo ebuild repository layout reader based on the
-//! [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/latest/pms.html).
+//! [Package Manager Specification (PMS)](https://projects.gentoo.org/pms/9/pms.html).
 //!
 //! This crate provides types for reading and navigating a Gentoo ebuild
 //! repository: `metadata/layout.conf`, category and package directory

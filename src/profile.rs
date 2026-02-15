@@ -9,7 +9,7 @@ use crate::util;
 
 /// Stability status of a profile.
 ///
-/// See [PMS 5](https://projects.gentoo.org/pms/latest/pms.html#profiles).
+/// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProfileStatus {
     /// Stable profile.
@@ -35,7 +35,7 @@ impl ProfileStatus {
 
 /// A profile entry from `profiles/profiles.desc`.
 ///
-/// See [PMS 5](https://projects.gentoo.org/pms/latest/pms.html#profiles).
+/// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone)]
 pub struct ProfileDesc {
     /// Architecture keyword (e.g. `amd64`).
@@ -70,7 +70,7 @@ impl ProfileDesc {
 /// Profiles contain stacked configuration files that control default
 /// USE flags, package masking, keywords, and more.
 ///
-/// See [PMS 5 — Profiles](https://projects.gentoo.org/pms/latest/pms.html#profiles).
+/// See [PMS 5 — Profiles](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone)]
 pub struct Profile {
     path: PathBuf,
@@ -113,7 +113,7 @@ impl Profile {
     /// Returns `(is_system, dep)` pairs. Lines prefixed with `*` indicate
     /// system packages.
     ///
-    /// See [PMS 5.2.6](https://projects.gentoo.org/pms/latest/pms.html#packages).
+    /// See [PMS 5.2.6](https://projects.gentoo.org/pms/9/pms.html#packages).
     pub fn packages(&self) -> Result<Vec<(bool, Dep)>> {
         let lines = util::read_lines(&self.path.join("packages"))?;
         let mut result = Vec::new();
@@ -131,7 +131,7 @@ impl Profile {
 
     /// Parse `package.mask`.
     ///
-    /// See [PMS 5.2.8](https://projects.gentoo.org/pms/latest/pms.html#packagemask).
+    /// See [PMS 5.2.8](https://projects.gentoo.org/pms/9/pms.html#packagemask).
     pub fn package_mask(&self) -> Result<Vec<Dep>> {
         parse_atom_list(&self.path.join("package.mask"))
     }
@@ -189,7 +189,7 @@ impl Profile {
     /// shell environment. After this call, the shell's environment contains the
     /// variables defined in `make.defaults`.
     ///
-    /// See [PMS 5.2.4](https://projects.gentoo.org/pms/latest/pms.html#makedefaults).
+    /// See [PMS 5.2.4](https://projects.gentoo.org/pms/9/pms.html#makedefaults).
     pub async fn make_defaults(&self, shell: &mut EbuildShell) -> Result<()> {
         let path = self.path.join("make.defaults");
         if path.is_file() {

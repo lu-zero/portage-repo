@@ -8,7 +8,7 @@ use crate::util;
 ///
 /// Represents a directory such as `dev-lang/` containing package directories.
 ///
-/// See [PMS 4](https://projects.gentoo.org/pms/latest/pms.html#tree-layout).
+/// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct Category {
     name: String,
