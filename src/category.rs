@@ -51,7 +51,7 @@ impl Category {
             let entry = entry.map_err(|e| util::io_err(&self.path, e))?;
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
-            if name.starts_with('.') {
+            if name.starts_with('.') || name == "CVS" {
                 continue;
             }
             let path = entry.path();

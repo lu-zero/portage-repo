@@ -217,7 +217,7 @@ fn list_dir_names(dir: &Path) -> Result<Vec<String>> {
         let entry = entry.map_err(|e| util::io_err(dir, e))?;
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
-        if !name.starts_with('.') {
+        if !name.starts_with('.') && name != "CVS" {
             names.push(name.into_owned());
         }
     }

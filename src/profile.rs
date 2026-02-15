@@ -9,8 +9,11 @@ use crate::util;
 
 /// Stability status of a profile.
 ///
+/// PMS allows repositories to define arbitrary status values beyond the
+/// well-known `stable`, `dev`, and `exp`.
+///
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProfileStatus {
     /// Stable profile.
     Stable,
@@ -18,17 +21,17 @@ pub enum ProfileStatus {
     Dev,
     /// Experimental profile.
     Exp,
+    /// A repository-defined status value not covered by the well-known variants.
+    Other(String),
 }
 
 impl ProfileStatus {
-    fn parse(s: &str) -> Result<Self> {
+    fn parse(s: &str) -> Self {
         match s {
-            "stable" => Ok(ProfileStatus::Stable),
-            "dev" => Ok(ProfileStatus::Dev),
-            "exp" => Ok(ProfileStatus::Exp),
-            _ => Err(Error::InvalidProfile(format!(
-                "unknown profile status: {s}"
-            ))),
+            "stable" => ProfileStatus::Stable,
+            "dev" => ProfileStatus::Dev,
+            "exp" => ProfileStatus::Exp,
+            other => ProfileStatus::Other(other.to_string()),
         }
     }
 }
@@ -60,7 +63,7 @@ impl ProfileDesc {
         Ok(ProfileDesc {
             arch: parts[0].to_string(),
             path: parts[1].to_string(),
-            status: ProfileStatus::parse(parts[2])?,
+            status: ProfileStatus::parse(parts[2]),
         })
     }
 }
@@ -249,8 +252,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_profile_desc_bad_status() {
-        assert!(ProfileDesc::parse("x86 some/path unknown").is_err());
+    fn parse_profile_desc_other_status() {
+        let desc = ProfileDesc::parse("x86 some/path testing").unwrap();
+        assert_eq!(desc.status, ProfileStatus::Other("testing".to_string()));
     }
 
     #[test]

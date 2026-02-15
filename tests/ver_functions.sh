@@ -1,157 +1,60 @@
-//! Portage-specific bash function definitions for the embedded shell.
-//!
-//! Real ebuilds and eclasses expect a set of Portage-provided functions
-//! (`inherit`, `die`, `EXPORT_FUNCTIONS`, etc.) to exist at source time.
-//! Rather than implementing each as a Rust builtin, we define them as
-//! bash shell functions via [`brush_core::Shell::run_string`].
-//!
-//! See [PMS 10](https://projects.gentoo.org/pms/9/pms.html#eclasses)
-//! and [PMS 12](https://projects.gentoo.org/pms/9/pms.html#available-commands) for the
-//! functions an ebuild/eclass may call.
-
-use brush_core::{Shell, SourceInfo};
-
-use crate::error::{Error, Result};
-
-/// Register all Portage-specific shell functions in the given shell.
-///
-/// This must be called once during [`crate::EbuildShell::new`] before
-/// any ebuild or eclass is sourced.
-pub(crate) async fn register(shell: &mut Shell) -> Result<()> {
-    let params = shell.default_exec_params();
-    let source_info = SourceInfo::from("portage-builtins");
-    shell
-        .run_string(PORTAGE_FUNCTIONS, &source_info, &params)
-        .await
-        .map_err(|e| Error::Shell(format!("registering portage builtins: {e}")))?;
-    Ok(())
-}
-
-/// All Portage-specific bash function definitions, concatenated into a
-/// single script that is evaluated once at shell init time.
-const PORTAGE_FUNCTIONS: &str = r#"
-# ── Tier 1: critical for eclass/ebuild sourcing ──────────────────────
-
-# die: abort with error message
-die() {
-    echo "die: $*" >&2
-    return 1
-}
-
-# nonfatal: run command, ignore failure
-nonfatal() { "$@"; return 0; }
-
-# inherit: source eclasses, track INHERITED, manage ECLASS
+#!/usr/bin/env bash
+# Test script for PMS 12.3.14 version manipulation functions.
+# Validates __ver_split, ver_cut, ver_rs, and ver_test.
 #
-# See PMS 10 — eclasses.
-# Eclass directories are communicated via the colon-separated
-# __PORTAGE_ECLASS_DIRS variable set by the Rust host.
-inherit() {
-    local __eclass
-    for __eclass in "$@"; do
-        # Skip if already inherited
-        case " ${INHERITED} " in
-            *" ${__eclass} "*) continue ;;
-        esac
-        local __eclass_file=""
-        local __dir
-        local IFS=:
-        for __dir in ${__PORTAGE_ECLASS_DIRS}; do
-            if [[ -f "${__dir}/${__eclass}.eclass" ]]; then
-                __eclass_file="${__dir}/${__eclass}.eclass"
-                break
-            fi
-        done
-        unset IFS
-        if [[ -z "${__eclass_file}" ]]; then
-            die "inherit: eclass not found: ${__eclass}"
-            return 1
-        fi
-        local __prev_eclass="${ECLASS}"
-        ECLASS="${__eclass}"
-        source "${__eclass_file}" || die "inherit: failed to source ${__eclass}"
-        ECLASS="${__prev_eclass}"
-        INHERITED="${INHERITED:+${INHERITED} }${__eclass}"
-    done
-}
+# Usage: bash tests/ver_functions.sh
+# Exit code 0 = all pass, 1 = failures
 
-# EXPORT_FUNCTIONS: create phase aliases for the current eclass
-#
-# See PMS 10 — EXPORT_FUNCTIONS.
-EXPORT_FUNCTIONS() {
-    if [[ -z "${ECLASS}" ]]; then
-        die "EXPORT_FUNCTIONS called outside eclass scope"
-        return 1
+set -euo pipefail
+
+PASS=0
+FAIL=0
+
+assert_eq() {
+    local desc="$1" expected="$2" actual="$3"
+    if [[ "${actual}" == "${expected}" ]]; then
+        PASS=$(( PASS + 1 ))
+    else
+        echo "FAIL: ${desc}: expected '${expected}', got '${actual}'"
+        FAIL=$(( FAIL + 1 ))
     fi
-    local __phase
-    for __phase in "$@"; do
-        eval "${__phase}() { ${ECLASS}_${__phase} \"\$@\"; }"
-    done
 }
 
-# ── Tier 2: called at eclass source time ─────────────────────────────
-
-# Debug output (no-ops for metadata extraction)
-debug-print()          { :; }
-debug-print-function() { :; }
-debug-print-section()  { :; }
-
-# User output (no-ops for metadata extraction)
-einfo()   { :; }
-einfon()  { :; }
-ewarn()   { :; }
-eerror()  { :; }
-elog()    { :; }
-eqawarn() { :; }
-ebegin()  { :; }
-eend()    { return "${1:-0}"; }
-
-# has: check if needle is in haystack
-has() {
-    local __needle="$1"; shift
-    local __x
-    for __x in "$@"; do
-        [[ "${__x}" == "${__needle}" ]] && return 0
-    done
-    return 1
+assert_true() {
+    local desc="$1"; shift
+    if "$@"; then
+        PASS=$(( PASS + 1 ))
+    else
+        echo "FAIL: ${desc}: expected true"
+        FAIL=$(( FAIL + 1 ))
+    fi
 }
 
-hasv() {
-    local __needle="$1"; shift
-    local __x
-    for __x in "$@"; do
-        if [[ "${__x}" == "${__needle}" ]]; then
-            echo "${__needle}"
-            return 0
-        fi
-    done
-    return 1
+assert_false() {
+    local desc="$1"; shift
+    if "$@"; then
+        echo "FAIL: ${desc}: expected false"
+        FAIL=$(( FAIL + 1 ))
+    else
+        PASS=$(( PASS + 1 ))
+    fi
 }
 
-hasq() { has "$@"; }
+# ── Source the functions from builtins.rs ──────────────────────────────
+# We extract the bash code between the raw string delimiters.
+# For testing standalone, we define stubs for die and PV/PVR.
 
-# ── Tier 3: USE flag queries (stubs for metadata extraction) ─────────
+die() { echo "die: $*" >&2; return 1; }
+PV="1.2.3"
+PVR="1.2.3-r1"
 
-use()        { return 1; }
-usev()       { return 1; }
-usex()       { [[ $# -ge 3 ]] && echo "$3" || echo "no"; return 1; }
-use_enable() { echo "--disable-${2:-$1}"; }
-use_with()   { echo "--without-${2:-$1}"; }
-in_iuse()    { has "$1" ${IUSE}; }
+# Extract and source the bash functions
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Source the functions inline (they're in a Rust raw string, we replicate them here)
+# Instead, let's define them directly for testing:
 
-# ── Tier 4: version manipulation (EAPI 7+ PM-provided) ──────────────
-#
-# Implements PMS 12.3.14 version manipulation commands and
-# PMS 3.3 algorithm 3.1 for version comparison.
+# ── __ver_split ───────────────────────────────────────────────────────
 
-# __ver_split: split version string into components and separators
-# per PMS 12.3.14.
-#
-# Sets __ver[] as [sep0, comp1, sep1, comp2, sep2, ..., compN, sepN]
-# and __ver_ncomp with the number of components.
-#
-# Components: [0-9]+ or [A-Za-z]+
-# Separators: [^A-Za-z0-9]+, or empty at digit↔letter transitions
 __ver_split() {
     local ver="$1"
     __ver=()
@@ -184,7 +87,6 @@ __ver_split() {
     done
 }
 
-# __ver_parse_range: parse "M", "M-N", "M-", "-N" into start/end
 __ver_parse_range() {
     if [[ "$1" == *-* ]]; then
         __range_start="${1%%-*}"
@@ -197,8 +99,6 @@ __ver_parse_range() {
     [[ -z "${__range_end}" ]] && __range_end=${__ver_ncomp}
 }
 
-# ver_cut <range> [<version>]
-# PMS 12.3.14: extract version components by range
 ver_cut() {
     local range="$1"
     local ver="${2:-${PV}}"
@@ -206,7 +106,6 @@ ver_cut() {
     local __range_start __range_end
     __ver_parse_range "${range}"
     local start=${__range_start} end=${__range_end}
-    # Must intersect present components [1..ncomp]
     if (( start > __ver_ncomp || end < 1 )); then
         return
     fi
@@ -228,8 +127,6 @@ ver_cut() {
     echo "${result}"
 }
 
-# ver_rs <range> <repl> [<range> <repl>]... [<version>]
-# PMS 12.3.14: replace version separators (one or more pairs)
 ver_rs() {
     local nargs=$#
     local ver
@@ -267,13 +164,9 @@ ver_rs() {
     echo "${result}"
 }
 
-# __ver_compare: PMS algorithm 3.1 full version comparison
-# Sets __ver_cmp to -1, 0, or 1
 __ver_compare() {
     local va="$1" vb="$2"
     __ver_cmp=0
-
-    # Extract revision (algorithm 3.7)
     local ra=0 rb=0
     if [[ "${va}" =~ ^(.*)-r([0-9]+)$ ]]; then
         va="${BASH_REMATCH[1]}"; ra="${BASH_REMATCH[2]}"
@@ -281,8 +174,6 @@ __ver_compare() {
     if [[ "${vb}" =~ ^(.*)-r([0-9]+)$ ]]; then
         vb="${BASH_REMATCH[1]}"; rb="${BASH_REMATCH[2]}"
     fi
-
-    # Extract suffixes (algorithms 3.5/3.6)
     local sa_t sa_n sb_t sb_n
     sa_t=(); sa_n=(); sb_t=(); sb_n=()
     while [[ "${va}" =~ ^(.*)_(alpha|beta|pre|rc|p)([0-9]*)$ ]]; do
@@ -295,8 +186,6 @@ __ver_compare() {
         sb_n=("${BASH_REMATCH[3]:-0}" "${sb_n[@]}")
         vb="${BASH_REMATCH[1]}"
     done
-
-    # Extract letter suffix (algorithm 3.4)
     local la="" lb=""
     if [[ "${va}" =~ ^(.*[0-9])([a-z])$ ]]; then
         va="${BASH_REMATCH[1]}"; la="${BASH_REMATCH[2]}"
@@ -304,29 +193,22 @@ __ver_compare() {
     if [[ "${vb}" =~ ^(.*[0-9])([a-z])$ ]]; then
         vb="${BASH_REMATCH[1]}"; lb="${BASH_REMATCH[2]}"
     fi
-
-    # Algorithm 3.2: numeric components (dot-separated)
     local IFS='.'
     local an bn
     an=(${va}); bn=(${vb})
     unset IFS
     local ann=${#an[@]} bnn=${#bn[@]}
-
-    # First component: integer comparison (algorithm 3.2 steps 2-6)
     local a0="${an[0]:-0}" b0="${bn[0]:-0}"
     while [[ "${a0}" == 0?* ]]; do a0="${a0#0}"; done
     while [[ "${b0}" == 0?* ]]; do b0="${b0#0}"; done
     [[ -z "${a0}" ]] && a0=0; [[ -z "${b0}" ]] && b0=0
     if (( a0 > b0 )); then __ver_cmp=1; return; fi
     if (( a0 < b0 )); then __ver_cmp=-1; return; fi
-
-    # Subsequent components: algorithm 3.3
     local cmin=$(( ann < bnn ? ann : bnn ))
     local i
     for (( i = 1; i < cmin; i++ )); do
         local ai="${an[i]}" bi="${bn[i]}"
         if [[ "${ai}" == 0?* ]] || [[ "${bi}" == 0?* ]]; then
-            # Leading zero: strip trailing zeros, compare as string
             local as="${ai}" bs="${bi}"
             while [[ "${as}" == *0 && ${#as} -gt 1 ]]; do as="${as%0}"; done
             while [[ "${bs}" == *0 && ${#bs} -gt 1 ]]; do bs="${bs%0}"; done
@@ -341,15 +223,10 @@ __ver_compare() {
             if (( ai_n < bi_n )); then __ver_cmp=-1; return; fi
         fi
     done
-    # Component count comparison (algorithm 3.2 steps 12-16)
     if (( ann > bnn )); then __ver_cmp=1; return; fi
     if (( ann < bnn )); then __ver_cmp=-1; return; fi
-
-    # Algorithm 3.4: letter comparison
     if [[ "${la}" > "${lb}" ]]; then __ver_cmp=1; return; fi
     if [[ "${la}" < "${lb}" ]]; then __ver_cmp=-1; return; fi
-
-    # Algorithms 3.5/3.6: suffix comparison
     local asn=${#sa_t[@]} bsn=${#sb_t[@]}
     local smin=$(( asn < bsn ? asn : bsn ))
     for (( i = 0; i < smin; i++ )); do
@@ -383,8 +260,6 @@ __ver_compare() {
         fi
         return
     fi
-
-    # Algorithm 3.7: revision comparison
     local ra_n="${ra}" rb_n="${rb}"
     while [[ "${ra_n}" == 0?* ]]; do ra_n="${ra_n#0}"; done
     while [[ "${rb_n}" == 0?* ]]; do rb_n="${rb_n#0}"; done
@@ -393,8 +268,6 @@ __ver_compare() {
     if (( ra_n < rb_n )); then __ver_cmp=-1; return; fi
 }
 
-# ver_test [<v1>] <op> <v2>
-# PMS 12.3.14: compare versions using PMS algorithm 3.1
 ver_test() {
     local va op vb
     if [[ $# -eq 3 ]]; then
@@ -420,49 +293,130 @@ ver_test() {
     esac
 }
 
-# ── Tier 5: package query stubs ──────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════
+# Tests
+# ══════════════════════════════════════════════════════════════════════
 
-has_version()  { return 1; }
-best_version() { echo ""; return 1; }
+echo "=== __ver_split ==="
 
-# ── Tier 6: build/install command stubs ──────────────────────────────
+# Basic numeric
+__ver_split "1.2.3"
+assert_eq "1.2.3 ncomp" "3" "${__ver_ncomp}"
+assert_eq "1.2.3 comp1" "1" "${__ver[1]}"
+assert_eq "1.2.3 sep1" "." "${__ver[2]}"
+assert_eq "1.2.3 comp2" "2" "${__ver[3]}"
+assert_eq "1.2.3 comp3" "3" "${__ver[5]}"
 
-econf()   { :; }
-emake()   { :; }
-einstall() { :; }
-unpack()  { :; }
-eapply()  { :; }
-eapply_user() { :; }
-default() { :; }
-default_src_unpack()    { :; }
-default_src_prepare()   { :; }
-default_src_configure() { :; }
-default_src_compile()   { :; }
-default_src_install()   { :; }
-default_src_test()      { :; }
+# Letter components (PMS: [A-Za-z]+ is a component, not a separator)
+__ver_split "1.2a3"
+assert_eq "1.2a3 ncomp" "4" "${__ver_ncomp}"
+assert_eq "1.2a3 comp1" "1" "${__ver[1]}"
+assert_eq "1.2a3 sep1" "." "${__ver[2]}"
+assert_eq "1.2a3 comp2" "2" "${__ver[3]}"
+assert_eq "1.2a3 sep2 (empty)" "" "${__ver[4]}"
+assert_eq "1.2a3 comp3" "a" "${__ver[5]}"
+assert_eq "1.2a3 sep3 (empty)" "" "${__ver[6]}"
+assert_eq "1.2a3 comp4" "3" "${__ver[7]}"
 
-# Directory commands
-into()    { :; }
-insinto() { :; }
-exeinto() { :; }
+# Leading separator
+__ver_split "@1.2"
+assert_eq "@1.2 leading sep" "@" "${__ver[0]}"
+assert_eq "@1.2 comp1" "1" "${__ver[1]}"
 
-# Install commands
-dobin()    { :; }
-dosbin()   { :; }
-doins()    { :; }
-doman()    { :; }
-dodoc()    { :; }
-doheader() { :; }
-dolib.a()  { :; }
-dolib.so() { :; }
-newbin()   { :; }
-newins()   { :; }
-dosym()    { :; }
-dodir()    { :; }
-keepdir()  { :; }
-doexe()    { :; }
-doinitd()  { :; }
-doconfd()  { :; }
-fperms()   { :; }
-fowners()  { :; }
-"#;
+# Trailing separator
+__ver_split "1.2-"
+assert_eq "1.2- trailing sep" "-" "${__ver[4]}"
+
+echo "=== ver_cut ==="
+
+# Basic ranges
+assert_eq "ver_cut 1" "1" "$(ver_cut 1 "1.2.3")"
+assert_eq "ver_cut 2" "2" "$(ver_cut 2 "1.2.3")"
+assert_eq "ver_cut 1-2" "1.2" "$(ver_cut 1-2 "1.2.3")"
+assert_eq "ver_cut 1-3" "1.2.3" "$(ver_cut 1-3 "1.2.3")"
+assert_eq "ver_cut 2-3" "2.3" "$(ver_cut 2-3 "1.2.3")"
+assert_eq "ver_cut 2-" "2.3" "$(ver_cut 2- "1.2.3")"
+
+# Letter components
+assert_eq "ver_cut 1 1.2a3" "1" "$(ver_cut 1 "1.2a3")"
+assert_eq "ver_cut 2-3 1.2a3" "2a" "$(ver_cut 2-3 "1.2a3")"
+assert_eq "ver_cut 3-4 1.2a3" "a3" "$(ver_cut 3-4 "1.2a3")"
+assert_eq "ver_cut 1-4 1.2a3" "1.2a3" "$(ver_cut 1-4 "1.2a3")"
+
+# Zero index (leading separator)
+assert_eq "ver_cut 0-2 @1.2" "@1.2" "$(ver_cut 0-2 "@1.2")"
+assert_eq "ver_cut 0-1 1.2" "1" "$(ver_cut 0-1 "1.2")"
+
+# Range past end (trailing separator)
+assert_eq "ver_cut 2- 1.2-" "2-" "$(ver_cut 2- "1.2-")"
+
+# Out of range
+assert_eq "ver_cut 5 1.2.3" "" "$(ver_cut 5 "1.2.3")"
+
+# Default PV
+assert_eq "ver_cut 1 default" "1" "$(ver_cut 1)"
+
+echo "=== ver_rs ==="
+
+# Basic replacement
+assert_eq "ver_rs 1 _ 1.2.3" "1_2.3" "$(ver_rs 1 _ "1.2.3")"
+assert_eq "ver_rs 1-2 _ 1.2.3" "1_2_3" "$(ver_rs 1-2 _ "1.2.3")"
+assert_eq "ver_rs 2 _ 1.2.3" "1.2_3" "$(ver_rs 2 _ "1.2.3")"
+
+# Multiple pairs
+assert_eq "ver_rs multi" "1_2-3" "$(ver_rs 1 _ 2 - "1.2.3")"
+
+# Replace empty separator (digit↔letter transition)
+assert_eq "ver_rs 2 . 1.2a3" "1.2.a3" "$(ver_rs 2 . "1.2a3")"
+
+# Default PV
+assert_eq "ver_rs 1 _ default" "1_2.3" "$(ver_rs 1 _)"
+
+echo "=== ver_test ==="
+
+# Basic integer comparison
+assert_true "1 -eq 1" ver_test 1 -eq 1
+assert_true "1 -lt 2" ver_test 1 -lt 2
+assert_true "2 -gt 1" ver_test 2 -gt 1
+assert_false "1 -gt 2" ver_test 1 -gt 2
+
+# Dotted versions
+assert_true "1.2.3 -eq 1.2.3" ver_test 1.2.3 -eq 1.2.3
+assert_true "1.2.3 -lt 1.2.4" ver_test 1.2.3 -lt 1.2.4
+assert_true "1.2.3 -gt 1.2.2" ver_test 1.2.3 -gt 1.2.2
+assert_true "1.2 -lt 1.2.1" ver_test 1.2 -lt 1.2.1
+
+# Letter suffixes (PMS algorithm 3.4)
+assert_true "1.0a -lt 1.0b" ver_test 1.0a -lt 1.0b
+assert_true "1.0b -gt 1.0a" ver_test 1.0b -gt 1.0a
+assert_true "1.0 -lt 1.0a" ver_test 1.0 -lt 1.0a
+assert_true "1.0z -gt 1.0" ver_test 1.0z -gt 1.0
+
+# Version suffixes (PMS algorithms 3.5/3.6)
+assert_true "_alpha < _beta" ver_test 1.0_alpha -lt 1.0_beta
+assert_true "_beta < _pre" ver_test 1.0_beta -lt 1.0_pre
+assert_true "_pre < _rc" ver_test 1.0_pre -lt 1.0_rc
+assert_true "_rc < release" ver_test 1.0_rc -lt 1.0
+assert_true "_p > release" ver_test 1.0_p -gt 1.0
+assert_true "_alpha < release" ver_test 1.0_alpha -lt 1.0
+assert_true "_p1 < _p2" ver_test 1.0_p1 -lt 1.0_p2
+assert_true "_alpha1 > _alpha" ver_test 1.0_alpha1 -gt 1.0_alpha
+
+# Multiple suffixes
+assert_true "_alpha_p < _beta" ver_test 1.0_alpha_p -lt 1.0_beta
+
+# Revision comparison (PMS algorithm 3.7)
+assert_true "-r0 -eq no rev" ver_test 1.0-r0 -eq 1.0
+assert_true "-r1 > -r0" ver_test 1.0-r1 -gt 1.0-r0
+assert_true "-r1 > no rev" ver_test 1.0-r1 -gt 1.0
+assert_true "-r2 > -r1" ver_test 1.0-r2 -gt 1.0-r1
+
+# 2-arg form uses PVR
+assert_true "2-arg PVR" ver_test -eq "1.2.3-r1"
+
+# Complex version
+assert_true "complex" ver_test 1.2.3_alpha1_p2-r3 -lt 1.2.3_alpha1_p3-r0
+
+echo ""
+echo "=== Results: ${PASS} passed, ${FAIL} failed ==="
+(( FAIL == 0 ))

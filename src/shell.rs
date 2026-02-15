@@ -126,12 +126,14 @@ impl EbuildShell {
         } else {
             pv.clone()
         };
+        let pr = format!("r{}", version.revision.0);
         let p = format!("{pn}-{pv}");
         let pf = format!("{pn}-{pvr}");
 
         self.set_var("CATEGORY", category);
         self.set_var("PN", pn);
         self.set_var("PV", &pv);
+        self.set_var("PR", &pr);
         self.set_var("PVR", &pvr);
         self.set_var("P", &p);
         self.set_var("PF", &pf);
