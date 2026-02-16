@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use portage_atom::{Cpn, Cpv};
@@ -201,6 +202,76 @@ impl Repository {
     /// layout (this repo's `eclass/` directory).
     pub async fn shell(&self) -> Result<EbuildShell> {
         EbuildShell::new(self).await
+    }
+
+    /// Create an [`EbuildShell`] with master repository eclass directories.
+    ///
+    /// Master eclass directories are prepended (searched first), matching
+    /// Portage's resolution order. The overlay's own `eclass/` directory
+    /// is searched last.
+    ///
+    /// See [PMS 4.7](https://projects.gentoo.org/pms/9/pms.html#tree-layout)
+    /// and [PMS 10.1](https://projects.gentoo.org/pms/9/pms.html#eclasses).
+    pub async fn shell_with_masters(&self, masters: &[&Repository]) -> Result<EbuildShell> {
+        let mut shell = EbuildShell::new(self).await?;
+        // Prepend master eclass dirs in reverse order so the first master
+        // ends up at position 0 (highest priority among masters).
+        for master in masters.iter().rev() {
+            let dir = master.path().join("eclass");
+            if dir.is_dir() {
+                shell.prepend_eclass_dir(dir);
+            }
+        }
+        Ok(shell)
+    }
+
+    /// Open a repository, resolving its master repositories from `repos_dir`.
+    ///
+    /// Each master listed in `layout.conf` is opened from
+    /// `repos_dir/<master_name>`, and its own masters are resolved
+    /// recursively (depth-first). Returns the opened repository and
+    /// the flattened list of master repositories in search order.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use portage_repo::Repository;
+    ///
+    /// let (overlay, masters) = Repository::open_with_masters(
+    ///     "/var/db/repos/my-overlay",
+    ///     "/var/db/repos",
+    /// ).unwrap();
+    /// ```
+    pub fn open_with_masters(
+        path: impl Into<PathBuf>,
+        repos_dir: impl AsRef<Path>,
+    ) -> Result<(Self, Vec<Repository>)> {
+        let repo = Self::open(path)?;
+        let mut masters = Vec::new();
+        let mut seen = HashSet::new();
+        seen.insert(repo.name().to_string());
+        Self::resolve_masters(&repo, repos_dir.as_ref(), &mut masters, &mut seen)?;
+        Ok((repo, masters))
+    }
+
+    /// Recursively resolve master repositories (depth-first).
+    fn resolve_masters(
+        repo: &Repository,
+        repos_dir: &Path,
+        out: &mut Vec<Repository>,
+        seen: &mut HashSet<String>,
+    ) -> Result<()> {
+        for master_name in &repo.layout().masters {
+            if !seen.insert(master_name.clone()) {
+                continue; // already resolved or cycle
+            }
+            let master_path = repos_dir.join(master_name);
+            let master = Self::open(master_path)?;
+            // Resolve the master's own masters first (depth-first).
+            Self::resolve_masters(&master, repos_dir, out, seen)?;
+            out.push(master);
+        }
+        Ok(())
     }
 }
 

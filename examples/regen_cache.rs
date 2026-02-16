@@ -69,32 +69,76 @@ struct FieldDiff {
 
 /// Regenerate metadata cache and compare against existing md5-cache.
 ///
-/// Usage: regen_cache <repo-path> [filter]
+/// Usage: regen_cache <repo-path> [filter] [--repos-dir <dir>]
+///
+/// If `--repos-dir` is given, master repositories listed in `layout.conf`
+/// are resolved from that directory and their eclasses are available to
+/// `inherit`.
 ///
 /// Examples:
 ///   regen_cache gentoo
 ///   regen_cache gentoo 'dev-lang/*'
-///   regen_cache gentoo 'dev-lang/rust-*'
+///   regen_cache /var/db/repos/my-overlay --repos-dir /var/db/repos
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <repo-path> [filter]", args[0]);
+        eprintln!(
+            "Usage: {} <repo-path> [filter] [--repos-dir <dir>]",
+            args[0]
+        );
         eprintln!();
         eprintln!("Examples:");
         eprintln!("  {} gentoo", args[0]);
         eprintln!("  {} gentoo 'dev-lang/*'", args[0]);
-        eprintln!("  {} gentoo 'dev-lang/rust-*'", args[0]);
+        eprintln!(
+            "  {} /var/db/repos/my-overlay --repos-dir /var/db/repos",
+            args[0]
+        );
         process::exit(2);
     }
     let repo_path = &args[1];
-    let filter = args.get(2).map(|s| s.as_str());
 
-    let repo = match Repository::open(repo_path) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("Error opening repository: {e}");
-            process::exit(1);
+    // Parse optional --repos-dir and filter from remaining args.
+    let mut filter: Option<&str> = None;
+    let mut repos_dir: Option<&str> = None;
+    let mut i = 2;
+    while i < args.len() {
+        if args[i] == "--repos-dir" {
+            i += 1;
+            if i < args.len() {
+                repos_dir = Some(&args[i]);
+            } else {
+                eprintln!("--repos-dir requires an argument");
+                process::exit(2);
+            }
+        } else if filter.is_none() {
+            filter = Some(&args[i]);
+        }
+        i += 1;
+    }
+
+    let (repo, masters) = if let Some(dir) = repos_dir {
+        match Repository::open_with_masters(repo_path, dir) {
+            Ok((r, m)) => {
+                if !m.is_empty() {
+                    let names: Vec<&str> = m.iter().map(|r| r.name()).collect();
+                    eprintln!("Resolved masters: {}", names.join(", "));
+                }
+                (r, m)
+            }
+            Err(e) => {
+                eprintln!("Error opening repository with masters: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
+        match Repository::open(repo_path) {
+            Ok(r) => (r, Vec::new()),
+            Err(e) => {
+                eprintln!("Error opening repository: {e}");
+                process::exit(1);
+            }
         }
     };
 
@@ -159,7 +203,8 @@ async fn main() {
         eprint!("\r[{}/{}] {}", i + 1, total, cpv_str);
 
         // Create a fresh shell for each ebuild (sourcing is not idempotent).
-        let mut shell = match repo.shell().await {
+        let master_refs: Vec<&Repository> = masters.iter().collect();
+        let mut shell = match repo.shell_with_masters(&master_refs).await {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("\nERROR creating shell for {cpv_str}: {e}");
