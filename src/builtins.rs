@@ -153,271 +153,227 @@ in_iuse()    { has "$1" ${IUSE}; }
 # Components: [0-9]+ or [A-Za-z]+
 # Separators: [^A-Za-z0-9]+, or empty at digit↔letter transitions
 __ver_split() {
-    local ver="$1"
+    local v="$1" LC_ALL=C
     __ver=()
     __ver_ncomp=0
-    if [[ "${ver}" =~ ^([^A-Za-z0-9]+)(.*) ]]; then
-        __ver+=("${BASH_REMATCH[1]}")
-        ver="${BASH_REMATCH[2]}"
-    else
-        __ver+=("")
-    fi
-    while [[ -n "${ver}" ]]; do
-        if [[ "${ver}" =~ ^([0-9]+)(.*) ]]; then
-            __ver+=("${BASH_REMATCH[1]}")
-            ver="${BASH_REMATCH[2]}"
-        elif [[ "${ver}" =~ ^([A-Za-z]+)(.*) ]]; then
-            __ver+=("${BASH_REMATCH[1]}")
-            ver="${BASH_REMATCH[2]}"
+
+    local s c
+    while [[ -n "${v}" ]]; do
+        # Cut the separator
+        if [[ "${v}" =~ ^([^A-Za-z0-9]+) ]]; then
+            s="${BASH_REMATCH[1]}"
         else
-            break
+            s=""
         fi
-        __ver_ncomp=$(( __ver_ncomp + 1 ))
-        if [[ -z "${ver}" ]]; then
-            __ver+=("")
-        elif [[ "${ver}" =~ ^([^A-Za-z0-9]+)(.*) ]]; then
-            __ver+=("${BASH_REMATCH[1]}")
-            ver="${BASH_REMATCH[2]}"
+        v="${v:${#s}}"
+        # Cut the next component: digits or letters
+        if [[ "${v}" == [0-9]* ]]; then
+            if [[ "${v}" =~ ^([0-9]+) ]]; then
+                c="${BASH_REMATCH[1]}"
+            else
+                c=""
+            fi
         else
-            __ver+=("")
+            if [[ "${v}" =~ ^([A-Za-z]+) ]]; then
+                c="${BASH_REMATCH[1]}"
+            else
+                c=""
+            fi
         fi
+        v="${v:${#c}}"
+        __ver+=("${s}" "${c}")
+        [[ -n "${c}" ]] && __ver_ncomp=$(( __ver_ncomp + 1 ))
     done
 }
 
-# __ver_parse_range: parse "M", "M-N", "M-", "-N" into start/end
+# __ver_parse_range: parse "M", "M-N", "M-" into start/end
+# Usage: __ver_parse_range <range> <max>
 __ver_parse_range() {
-    if [[ "$1" == *-* ]]; then
-        __range_start="${1%%-*}"
-        __range_end="${1##*-}"
+    local range="$1" max="$2"
+    [[ "${range}" == [0-9]* ]] \
+        || { die "${FUNCNAME}: range must start with a number"; return 1; }
+    __range_start="${range%-*}"
+    if [[ "${range}" == *-* ]]; then
+        __range_end="${range#*-}"
     else
-        __range_start="$1"
-        __range_end="$1"
+        __range_end="${__range_start}"
     fi
-    [[ -z "${__range_start}" ]] && __range_start=0
-    [[ -z "${__range_end}" ]] && __range_end=${__ver_ncomp}
+    if [[ -n "${__range_end}" ]]; then
+        (( __range_start <= __range_end )) \
+            || { die "${FUNCNAME}: end of range must be >= start"; return 1; }
+        (( __range_end <= max )) || __range_end=${max}
+    else
+        __range_end=${max}
+    fi
 }
 
 # ver_cut <range> [<version>]
 # PMS 12.3.14: extract version components by range
 ver_cut() {
     local range="$1"
-    local ver="${2:-${PV}}"
-    __ver_split "${ver}"
+    local v="${2:-${PV}}"
     local __range_start __range_end
-    __ver_parse_range "${range}"
+    local -a __ver
+    local __ver_ncomp
+
+    __ver_split "${v}"
+    local max=$(( ${#__ver[@]} / 2 ))
+    __ver_parse_range "${range}" "${max}" || return
     local start=${__range_start} end=${__range_end}
-    # Must intersect present components [1..ncomp]
-    if (( start > __ver_ncomp || end < 1 )); then
-        return
+
+    if (( start > 0 )); then
+        start=$(( start * 2 - 1 ))
     fi
-    local s_idx e_idx
-    if (( start <= 0 )); then
-        s_idx=0
-    else
-        s_idx=$(( 2 * start - 1 ))
-    fi
-    if (( end >= __ver_ncomp )); then
-        e_idx=$(( ${#__ver[@]} - 1 ))
-    else
-        e_idx=$(( 2 * end - 1 ))
-    fi
-    local result="" i
-    for (( i = s_idx; i <= e_idx; i++ )); do
-        result+="${__ver[i]}"
-    done
-    echo "${result}"
+    # Work around a bug in bash-3.2, where "${__ver[*]:start:end*2-start}"
+    # inserts stray 0x7f characters for empty array elements
+    printf "%s" "${__ver[@]:start:end*2-start}" $'\n'
 }
 
 # ver_rs <range> <repl> [<range> <repl>]... [<version>]
 # PMS 12.3.14: replace version separators (one or more pairs)
 ver_rs() {
-    local nargs=$#
-    local ver
-    if (( nargs % 2 == 1 )); then
-        eval "ver=\${$nargs}"
-        (( nargs-- ))
-    else
-        ver="${PV}"
-    fi
-    __ver_split "${ver}"
-    local p=1
-    while (( p < nargs )); do
-        eval "local __range=\${$p}"
-        eval "local __repl=\${$((p+1))}"
-        local __range_start __range_end
-        __ver_parse_range "${__range}"
-        local start=${__range_start} end=${__range_end}
-        local i
-        for (( i = start; i <= end; i++ )); do
-            local arr_idx=$(( 2 * i ))
-            if (( arr_idx < 0 || arr_idx >= ${#__ver[@]} )); then
-                continue
-            fi
-            if (( i == 0 || i == __ver_ncomp )); then
-                [[ -z "${__ver[arr_idx]}" ]] && continue
-            fi
-            __ver[arr_idx]="${__repl}"
+    local v
+    (( $# & 1 )) && v="${@: -1}" || v="${PV}"
+    local __range_start __range_end i
+    local -a __ver
+    local __ver_ncomp
+
+    __ver_split "${v}"
+    local max=$(( ${#__ver[@]} / 2 - 1 ))
+
+    while [[ $# -ge 2 ]]; do
+        __ver_parse_range "$1" "${max}" || return
+        for (( i = __range_start * 2; i <= __range_end * 2; i += 2 )); do
+            [[ ${i} -eq 0 && -z "${__ver[i]}" ]] && continue
+            __ver[i]="$2"
         done
-        (( p += 2 ))
+        shift 2
     done
-    local result="" i
+
+    local result=""
     for (( i = 0; i < ${#__ver[@]}; i++ )); do
         result+="${__ver[i]}"
     done
     echo "${result}"
 }
 
+# __ver_compare_int: compare two non-negative integers of arbitrary length
+# Returns: 0 if equal, 1 if a < b, 3 if a > b
+__ver_compare_int() {
+    local a="$1" b="$2" d=$(( ${#1} - ${#2} ))
+
+    # Zero-pad to equal length if necessary
+    if [[ ${d} -gt 0 ]]; then
+        printf -v b "%0${d}d%s" 0 "${b}"
+    elif [[ ${d} -lt 0 ]]; then
+        printf -v a "%0$(( -d ))d%s" 0 "${a}"
+    fi
+
+    [[ "${a}" > "${b}" ]] && return 3
+    [[ "${a}" == "${b}" ]]
+}
+
 # __ver_compare: PMS algorithm 3.1 full version comparison
-# Sets __ver_cmp to -1, 0, or 1
+# Returns: 1 if va < vb, 2 if va == vb, 3 if va > vb
 __ver_compare() {
-    local va="$1" vb="$2"
-    __ver_cmp=0
+    local va="$1" vb="$2" a an al as ar b bn bl bs br re LC_ALL=C
 
-    # Extract revision (algorithm 3.7)
-    local ra=0 rb=0
-    if [[ "${va}" =~ ^(.*)-r([0-9]+)$ ]]; then
-        va="${BASH_REMATCH[1]}"; ra="${BASH_REMATCH[2]}"
-    fi
-    if [[ "${vb}" =~ ^(.*)-r([0-9]+)$ ]]; then
-        vb="${BASH_REMATCH[1]}"; rb="${BASH_REMATCH[2]}"
-    fi
+    re="^([0-9]+(\.[0-9]+)*)([a-z]?)((_(alpha|beta|pre|rc|p)[0-9]*)*)(-r[0-9]+)?$"
 
-    # Extract suffixes (algorithms 3.5/3.6)
-    local sa_t sa_n sb_t sb_n
-    sa_t=(); sa_n=(); sb_t=(); sb_n=()
-    while [[ "${va}" =~ ^(.*)_(alpha|beta|pre|rc|p)([0-9]*)$ ]]; do
-        sa_t=("${BASH_REMATCH[2]}" "${sa_t[@]}")
-        sa_n=("${BASH_REMATCH[3]:-0}" "${sa_n[@]}")
-        va="${BASH_REMATCH[1]}"
-    done
-    while [[ "${vb}" =~ ^(.*)_(alpha|beta|pre|rc|p)([0-9]*)$ ]]; do
-        sb_t=("${BASH_REMATCH[2]}" "${sb_t[@]}")
-        sb_n=("${BASH_REMATCH[3]:-0}" "${sb_n[@]}")
-        vb="${BASH_REMATCH[1]}"
-    done
+    [[ "${va}" =~ ${re} ]] || { die "${FUNCNAME}: invalid version: ${va}"; return 0; }
+    an="${BASH_REMATCH[1]}"
+    al="${BASH_REMATCH[3]}"
+    as="${BASH_REMATCH[4]}"
+    ar="${BASH_REMATCH[7]}"
 
-    # Extract letter suffix (algorithm 3.4)
-    local la="" lb=""
-    if [[ "${va}" =~ ^(.*[0-9])([a-z])$ ]]; then
-        va="${BASH_REMATCH[1]}"; la="${BASH_REMATCH[2]}"
-    fi
-    if [[ "${vb}" =~ ^(.*[0-9])([a-z])$ ]]; then
-        vb="${BASH_REMATCH[1]}"; lb="${BASH_REMATCH[2]}"
-    fi
+    [[ "${vb}" =~ ${re} ]] || { die "${FUNCNAME}: invalid version: ${vb}"; return 0; }
+    bn="${BASH_REMATCH[1]}"
+    bl="${BASH_REMATCH[3]}"
+    bs="${BASH_REMATCH[4]}"
+    br="${BASH_REMATCH[7]}"
 
-    # Algorithm 3.2: numeric components (dot-separated)
-    local IFS='.'
-    local an bn
-    an=(${va}); bn=(${vb})
-    unset IFS
-    local ann=${#an[@]} bnn=${#bn[@]}
+    # Compare numeric components (PMS algorithm 3.2)
+    # First component
+    __ver_compare_int "${an%%.*}" "${bn%%.*}" || return
 
-    # First component: integer comparison (algorithm 3.2 steps 2-6)
-    local a0="${an[0]:-0}" b0="${bn[0]:-0}"
-    while [[ "${a0}" == 0?* ]]; do a0="${a0#0}"; done
-    while [[ "${b0}" == 0?* ]]; do b0="${b0#0}"; done
-    [[ -z "${a0}" ]] && a0=0; [[ -z "${b0}" ]] && b0=0
-    if (( a0 > b0 )); then __ver_cmp=1; return; fi
-    if (( a0 < b0 )); then __ver_cmp=-1; return; fi
-
-    # Subsequent components: algorithm 3.3
-    local cmin=$(( ann < bnn ? ann : bnn ))
-    local i
-    for (( i = 1; i < cmin; i++ )); do
-        local ai="${an[i]}" bi="${bn[i]}"
-        if [[ "${ai}" == 0?* ]] || [[ "${bi}" == 0?* ]]; then
-            # Leading zero: strip trailing zeros, compare as string
-            local as="${ai}" bs="${bi}"
-            while [[ "${as}" == *0 && ${#as} -gt 1 ]]; do as="${as%0}"; done
-            while [[ "${bs}" == *0 && ${#bs} -gt 1 ]]; do bs="${bs%0}"; done
-            if [[ "${as}" > "${bs}" ]]; then __ver_cmp=1; return; fi
-            if [[ "${as}" < "${bs}" ]]; then __ver_cmp=-1; return; fi
+    while [[ "${an}" == *.* && "${bn}" == *.* ]]; do
+        # Other components (PMS algorithm 3.3)
+        an="${an#*.}"
+        bn="${bn#*.}"
+        a="${an%%.*}"
+        b="${bn%%.*}"
+        if [[ "${a}" == 0* || "${b}" == 0* ]]; then
+            # Remove any trailing zeros
+            [[ "${a}" =~ 0+$ ]] && a="${a%"${BASH_REMATCH[0]}"}"
+            [[ "${b}" =~ 0+$ ]] && b="${b%"${BASH_REMATCH[0]}"}"
+            [[ "${a}" > "${b}" ]] && return 3
+            [[ "${a}" < "${b}" ]] && return 1
         else
-            local ai_n="${ai}" bi_n="${bi}"
-            while [[ "${ai_n}" == 0?* ]]; do ai_n="${ai_n#0}"; done
-            while [[ "${bi_n}" == 0?* ]]; do bi_n="${bi_n#0}"; done
-            [[ -z "${ai_n}" ]] && ai_n=0; [[ -z "${bi_n}" ]] && bi_n=0
-            if (( ai_n > bi_n )); then __ver_cmp=1; return; fi
-            if (( ai_n < bi_n )); then __ver_cmp=-1; return; fi
+            __ver_compare_int "${a}" "${b}" || return
         fi
     done
-    # Component count comparison (algorithm 3.2 steps 12-16)
-    if (( ann > bnn )); then __ver_cmp=1; return; fi
-    if (( ann < bnn )); then __ver_cmp=-1; return; fi
+    [[ "${an}" == *.* ]] && return 3
+    [[ "${bn}" == *.* ]] && return 1
 
-    # Algorithm 3.4: letter comparison
-    if [[ "${la}" > "${lb}" ]]; then __ver_cmp=1; return; fi
-    if [[ "${la}" < "${lb}" ]]; then __ver_cmp=-1; return; fi
+    # Compare letter components (PMS algorithm 3.4)
+    [[ "${al}" > "${bl}" ]] && return 3
+    [[ "${al}" < "${bl}" ]] && return 1
 
-    # Algorithms 3.5/3.6: suffix comparison
-    local asn=${#sa_t[@]} bsn=${#sb_t[@]}
-    local smin=$(( asn < bsn ? asn : bsn ))
-    for (( i = 0; i < smin; i++ )); do
-        if [[ "${sa_t[i]}" == "${sb_t[i]}" ]]; then
-            local an_s="${sa_n[i]}" bn_s="${sb_n[i]}"
-            [[ -z "${an_s}" ]] && an_s=0; [[ -z "${bn_s}" ]] && bn_s=0
-            if (( an_s > bn_s )); then __ver_cmp=1; return; fi
-            if (( an_s < bn_s )); then __ver_cmp=-1; return; fi
+    # Compare suffixes (PMS algorithm 3.5)
+    as="${as#_}${as:+_}"
+    bs="${bs#_}${bs:+_}"
+    while [[ -n "${as}" && -n "${bs}" ]]; do
+        # Compare each suffix (PMS algorithm 3.6)
+        a="${as%%_*}"
+        b="${bs%%_*}"
+        if [[ "${a%%[0-9]*}" == "${b%%[0-9]*}" ]]; then
+            __ver_compare_int "${a##*[a-z]}" "${b##*[a-z]}" || return
         else
-            local ao bo
-            case "${sa_t[i]}" in
-                alpha) ao=0 ;; beta) ao=1 ;; pre) ao=2 ;;
-                rc) ao=3 ;; p) ao=4 ;;
-            esac
-            case "${sb_t[i]}" in
-                alpha) bo=0 ;; beta) bo=1 ;; pre) bo=2 ;;
-                rc) bo=3 ;; p) bo=4 ;;
-            esac
-            if (( ao > bo )); then __ver_cmp=1; else __ver_cmp=-1; fi
-            return
+            # Check for p first
+            [[ "${a%%[0-9]*}" == "p" ]] && return 3
+            [[ "${b%%[0-9]*}" == "p" ]] && return 1
+            # Hack: Use that alpha < beta < pre < rc alphabetically
+            [[ "${a}" > "${b}" ]] && return 3 || return 1
         fi
+        as="${as#*_}"
+        bs="${bs#*_}"
     done
-    if (( asn != bsn )); then
-        local extra_t
-        if (( asn > bsn )); then
-            extra_t="${sa_t[bsn]}"
-            if [[ "${extra_t}" == "p" ]]; then __ver_cmp=1; else __ver_cmp=-1; fi
-        else
-            extra_t="${sb_t[asn]}"
-            if [[ "${extra_t}" == "p" ]]; then __ver_cmp=-1; else __ver_cmp=1; fi
-        fi
-        return
+    if [[ -n "${as}" ]]; then
+        [[ "${as}" == p[_0-9]* ]] && return 3 || return 1
+    elif [[ -n "${bs}" ]]; then
+        [[ "${bs}" == p[_0-9]* ]] && return 1 || return 3
     fi
 
-    # Algorithm 3.7: revision comparison
-    local ra_n="${ra}" rb_n="${rb}"
-    while [[ "${ra_n}" == 0?* ]]; do ra_n="${ra_n#0}"; done
-    while [[ "${rb_n}" == 0?* ]]; do rb_n="${rb_n#0}"; done
-    [[ -z "${ra_n}" ]] && ra_n=0; [[ -z "${rb_n}" ]] && rb_n=0
-    if (( ra_n > rb_n )); then __ver_cmp=1; return; fi
-    if (( ra_n < rb_n )); then __ver_cmp=-1; return; fi
+    # Compare revision components (PMS algorithm 3.7)
+    __ver_compare_int "${ar#-r}" "${br#-r}" || return
+
+    return 2
 }
 
 # ver_test [<v1>] <op> <v2>
 # PMS 12.3.14: compare versions using PMS algorithm 3.1
 ver_test() {
     local va op vb
+
     if [[ $# -eq 3 ]]; then
-        va="$1"; op="$2"; vb="$3"
-    elif [[ $# -eq 2 ]]; then
-        va="${PVR}"; op="$1"; vb="$2"
+        va="$1"
+        shift
     else
-        die "ver_test: invalid arguments: $*"
-        return 1
+        va="${PVR}"
     fi
-    __ver_compare "${va}" "${vb}"
+
+    [[ $# -eq 2 ]] || { die "${FUNCNAME}: bad number of arguments"; return 1; }
+
+    op="$1"
+    vb="$2"
+
     case "${op}" in
-        -eq) (( __ver_cmp == 0 )) ;;
-        -ne) (( __ver_cmp != 0 )) ;;
-        -lt) (( __ver_cmp < 0 )) ;;
-        -le) (( __ver_cmp <= 0 )) ;;
-        -gt) (( __ver_cmp > 0 )) ;;
-        -ge) (( __ver_cmp >= 0 )) ;;
-        *)
-            die "ver_test: unknown operator: ${op}"
-            return 1
-            ;;
+        -eq|-ne|-lt|-le|-gt|-ge) ;;
+        *) die "${FUNCNAME}: invalid operator: ${op}"; return 1 ;;
     esac
+
+    __ver_compare "${va}" "${vb}"
+    test $? "${op}" 2
 }
 
 # ── Tier 5: package query stubs ──────────────────────────────────────

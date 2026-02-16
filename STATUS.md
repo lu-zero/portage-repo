@@ -21,6 +21,12 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
   `package.use.stable.mask`
 - `make.defaults` sourced through embedded bash shell
 
+#### Master repository eclass resolution (PMS 4.7, 10.1)
+- `Repository::open_with_masters()` — opens a repo and recursively resolves
+  master repositories from a base directory (depth-first, with cycle detection)
+- `Repository::shell_with_masters()` — creates an `EbuildShell` with master
+  eclass directories prepended, so `inherit` finds eclasses from masters
+
 #### Embedded bash shell (PMS 10, 12)
 - Full embedded shell via brush-core with the winnow parser
 - Eclass sourcing via `inherit()` with `INHERITED` tracking and `ECLASS` scoping
@@ -39,57 +45,17 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 - `die`, `nonfatal`
 - `has`, `hasv`, `hasq`
 - `use`, `usev`, `usex`, `use_enable`, `use_with`, `in_iuse` (stubs — always return false)
-- `ver_cut`, `ver_rs`, `ver_test` (buggy — see below)
+- `ver_cut`, `ver_rs`, `ver_test` (match Gentoo reference implementation)
 - `has_version`, `best_version` (stubs)
 - Debug/output no-ops: `einfo`, `ewarn`, `eerror`, `debug-print`, etc.
 - Build/install stubs: `econf`, `emake`, `eapply`, `dobin`, `doins`, etc.
 
 ---
 
-### Bugs
-
-#### `__ver_split` treats letters as separators (PMS 12.3.14)
-The version splitting helper only recognises `[0-9]+` as components and treats
-everything else as separators. PMS says `[A-Za-z]+` sequences are version
-*components*, not separators, and empty-string separators occur at digit↔letter
-transitions. For example `1.2a3` should produce components `[1, 2, a, 3]` with
-separators `[., "", ""]` but the current code treats `a` as part of a separator.
-
-#### `ver_test` comparison is numeric-only (PMS 3.3, 12.3.14)
-`ver_test` compares only numeric components. It ignores:
-- Letter components (e.g. `1.0a` vs `1.0b`)
-- Suffixes (`_alpha`, `_beta`, `_pre`, `_rc`, `_p`)
-- Revision comparison (`-r1` vs `-r2`)
-
-PMS requires the full algorithm 3.1 (version comparison).
-
-#### `ver_test` 2-arg form uses `${PV}` instead of `${PVR}` (PMS 12.3.14)
-When called with two arguments (`ver_test <op> <v2>`), the LHS should default
-to `${PVR}`, not `${PV}`.
-
-#### `ver_rs` only handles one range/replacement pair (PMS 12.3.14)
-PMS says `ver_rs` takes "one or more pairs of arguments, optionally followed by
-a version string." The implementation only handles a single pair.
-
-#### `ver_cut` zero-index is broken (PMS 12.3.14)
-Range index 0 should refer to the separator before the first component. The
-arithmetic `(0 - 1) * 2 = -2` produces an invalid array index.
-
-#### `profiles.desc` rejects unknown stability values (PMS 4.4.1)
-`ProfileStatus::parse()` only accepts `stable`, `dev`, `exp`. PMS allows
-repositories to define additional values.
-
-#### `PR` variable not set (PMS 11.1)
-Ebuilds referencing `${PR}` at global scope get an empty string. PMS requires
-`PR` to be `r0` when no revision exists, or `rN` otherwise.
-
----
-
 ### Missing features
 
 #### PM-provided variables (PMS 11.1)
-Only `CATEGORY`, `PN`, `PV`, `PVR`, `P`, `PF`, `FILESDIR` are set. Missing:
-- `PR` (bug, see above)
+Only `CATEGORY`, `PN`, `PV`, `PR`, `PVR`, `P`, `PF`, `FILESDIR` are set. Missing:
 - `WORKDIR`, `S`, `T`, `TMPDIR`, `HOME` — needed for ebuilds that reference
   these at global scope
 - `D`, `ED`, `ROOT`, `EROOT`, `EPREFIX`, `DISTDIR` — phase-execution only
@@ -134,11 +100,6 @@ USE_EXPAND variable descriptions not implemented.
 #### `profiles/updates/` directory (PMS 4.4.4)
 Package move/slotmove updates not implemented.
 
-#### Master repository eclass resolution (PMS 4.7, 10.1)
-`layout.conf` `masters` is parsed but not used to add master repos' eclass
-directories. Ebuilds in overlay repos that inherit from `::gentoo` eclasses
-will fail to find them.
-
 #### Eclass metadata key accumulation (PMS 10.2)
 Eclasses that overwrite (rather than append to) `DEPEND`, `RDEPEND`, etc. are
 not corrected. PMS requires the PM to save/restore/append these keys across
@@ -147,10 +108,6 @@ not corrected. PMS requires the PM to save/restore/append these keys across
 #### Legacy metadata cache format (PMS 14.2)
 Only md5-dict (`metadata/md5-cache/`) is supported. The positional line-based
 `metadata/cache/` format is not implemented.
-
-#### CVS directory exclusion (PMS 4.2)
-Dotfiles are skipped but `CVS` directories are not explicitly excluded from
-category/package enumeration.
 
 #### `ver_replacing` command (PMS 12.3.14, EAPI 9)
 Not implemented.
