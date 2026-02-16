@@ -15,7 +15,6 @@ use crate::repository::Repository;
 /// These correspond to the PMS-defined metadata variables that an ebuild
 /// is expected to define after being sourced.
 const METADATA_VARS: &[&str] = &[
-    "EAPI",
     "DESCRIPTION",
     "HOMEPAGE",
     "SRC_URI",
@@ -179,6 +178,10 @@ impl EbuildShell {
             .into_owned();
         self.set_var("FILESDIR", &filesdir);
 
+        // Detect EAPI before sourcing per PMS 7.3.1
+        let eapi = ebuild.detect_eapi()?;
+        self.set_var("EAPI", &eapi.to_string());
+
         // Source the ebuild — `inherit` is a shell function that handles
         // eclass sourcing, line continuations, and nesting naturally.
         let params = self.shell.default_exec_params();
@@ -187,8 +190,11 @@ impl EbuildShell {
             .await
             .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path().display())))?;
 
-        // Extract metadata
-        self.extract_metadata()
+        // Extract metadata, then override EAPI with the pre-detected value
+        // (the authoritative source per PMS 7.3.1)
+        let mut metadata = self.extract_metadata()?;
+        metadata.eapi = eapi;
+        Ok(metadata)
     }
 
     /// Source an eclass by name.

@@ -38,6 +38,8 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
   `EAPI`, `DESCRIPTION`, `SLOT`, `HOMEPAGE`, `SRC_URI`, `LICENSE`, `KEYWORDS`,
   `IUSE`, `REQUIRED_USE`, `RESTRICT`, `PROPERTIES`, `DEPEND`, `RDEPEND`,
   `BDEPEND`, `PDEPEND`, `IDEPEND`, `INHERITED`, `DEFINED_PHASES`
+- `EAPI` detected by regex before sourcing per PMS 7.3.1 and set in the shell
+  environment so it is available during sourcing
 - `DEFINED_PHASES` computed from shell function table after sourcing (PMS 7.4)
 - Comparison tooling: `examples/regen_cache.rs` sources every ebuild and diffs
   against the md5-cache
@@ -62,11 +64,6 @@ Only `CATEGORY`, `PN`, `PV`, `PR`, `PVR`, `P`, `PF`, `FILESDIR` are set. Missing
 - `D`, `ED`, `ROOT`, `EROOT`, `EPREFIX`, `DISTDIR` — phase-execution only
 - `SYSROOT`, `ESYSROOT`, `BROOT` — EAPI 7+
 - `EBUILD_PHASE`, `EBUILD_PHASE_FUNC`, `MERGE_TYPE`
-
-#### EAPI pre-source detection (PMS 7.3.1)
-PMS requires detecting EAPI by regex-matching the first assignment line
-*before* sourcing. The code sources the ebuild and reads EAPI from the shell
-environment afterward.
 
 #### Profile inheritance / stacking (PMS 5.1, 5.2.5)
 `Profile` reads files in isolation — no parent merging, no `-` prefix removal
