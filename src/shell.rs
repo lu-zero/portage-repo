@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use brush_builtins::ShellBuilderExt;
 use brush_core::parser::ParserImpl;
 use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable};
-use portage_metadata::EbuildMetadata;
+use portage_metadata::{EbuildMetadata, Phase};
 
 use crate::builtins;
 use crate::ebuild::Ebuild;
@@ -32,7 +32,30 @@ const METADATA_VARS: &[&str] = &[
     "PDEPEND",
     "IDEPEND",
     "INHERITED",
-    "DEFINED_PHASES",
+];
+
+/// PMS phase function names mapped to their [`Phase`] variants.
+///
+/// Used to compute `DEFINED_PHASES` by inspecting which functions are
+/// defined in the shell after sourcing an ebuild.
+///
+/// See [PMS 7.4](https://projects.gentoo.org/pms/9/pms.html#defined-phases).
+const PHASE_FUNCTIONS: &[(&str, Phase)] = &[
+    ("pkg_pretend", Phase::PkgPretend),
+    ("pkg_setup", Phase::PkgSetup),
+    ("src_unpack", Phase::SrcUnpack),
+    ("src_prepare", Phase::SrcPrepare),
+    ("src_configure", Phase::SrcConfigure),
+    ("src_compile", Phase::SrcCompile),
+    ("src_test", Phase::SrcTest),
+    ("src_install", Phase::SrcInstall),
+    ("pkg_preinst", Phase::PkgPreinst),
+    ("pkg_postinst", Phase::PkgPostinst),
+    ("pkg_prerm", Phase::PkgPrerm),
+    ("pkg_postrm", Phase::PkgPostrm),
+    ("pkg_config", Phase::PkgConfig),
+    ("pkg_info", Phase::PkgInfo),
+    ("pkg_nofetch", Phase::PkgNofetch),
 ];
 
 /// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
@@ -86,9 +109,18 @@ impl EbuildShell {
         Ok(ebuild_shell)
     }
 
-    /// Add an additional eclass directory (e.g. from a master repository).
+    /// Append an eclass directory (searched after existing dirs).
     pub fn add_eclass_dir(&mut self, dir: PathBuf) {
         self.eclass_dirs.push(dir);
+        self.sync_eclass_dirs_var();
+    }
+
+    /// Prepend an eclass directory (searched before existing dirs).
+    ///
+    /// Used to add master repository eclass directories so they are
+    /// searched before the overlay's own eclasses.
+    pub fn prepend_eclass_dir(&mut self, dir: PathBuf) {
+        self.eclass_dirs.insert(0, dir);
         self.sync_eclass_dirs_var();
     }
 
@@ -220,6 +252,17 @@ impl EbuildShell {
 
         let cache_str = cache_lines.join("\n");
         let entry = portage_metadata::CacheEntry::parse(&cache_str)?;
-        Ok(entry.metadata)
+
+        // Compute DEFINED_PHASES by inspecting which phase functions are
+        // defined in the shell after sourcing (PMS 7.4).
+        let defined_phases: Vec<Phase> = PHASE_FUNCTIONS
+            .iter()
+            .filter(|(name, _)| self.shell.funcs().get(name).is_some())
+            .map(|(_, phase)| *phase)
+            .collect();
+
+        let mut metadata = entry.metadata;
+        metadata.defined_phases = defined_phases;
+        Ok(metadata)
     }
 }

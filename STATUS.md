@@ -38,6 +38,7 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
   `EAPI`, `DESCRIPTION`, `SLOT`, `HOMEPAGE`, `SRC_URI`, `LICENSE`, `KEYWORDS`,
   `IUSE`, `REQUIRED_USE`, `RESTRICT`, `PROPERTIES`, `DEPEND`, `RDEPEND`,
   `BDEPEND`, `PDEPEND`, `IDEPEND`, `INHERITED`, `DEFINED_PHASES`
+- `DEFINED_PHASES` computed from shell function table after sourcing (PMS 7.4)
 - Comparison tooling: `examples/regen_cache.rs` sources every ebuild and diffs
   against the md5-cache
 
@@ -61,12 +62,6 @@ Only `CATEGORY`, `PN`, `PV`, `PR`, `PVR`, `P`, `PF`, `FILESDIR` are set. Missing
 - `D`, `ED`, `ROOT`, `EROOT`, `EPREFIX`, `DISTDIR` — phase-execution only
 - `SYSROOT`, `ESYSROOT`, `BROOT` — EAPI 7+
 - `EBUILD_PHASE`, `EBUILD_PHASE_FUNC`, `MERGE_TYPE`
-
-#### DEFINED_PHASES not computed (PMS 7.4)
-The shell does not scan for defined phase functions after sourcing.
-`DEFINED_PHASES` is whatever the ebuild/eclasses set explicitly (typically
-nothing, showing as `-`). Portage computes this by inspecting which functions
-exist in the shell after sourcing.
 
 #### EAPI pre-source detection (PMS 7.3.1)
 PMS requires detecting EAPI by regex-matching the first assignment line
