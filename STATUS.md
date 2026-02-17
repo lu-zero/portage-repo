@@ -133,6 +133,10 @@ order or with different whitespace than the reference cache from `pmaint regen`.
 The regen_cache comparison uses key-by-key diffing, but within-value ordering
 (e.g. USE flags, keywords) may still cause false-positive diffs.
 
+`DEFINED_PHASES` is now sorted alphabetically to match Portage's cache format.
+`INHERITED` is excluded from comparison since the md5-cache uses `_eclasses_`
+with checksums instead.
+
 ### USE flag stubs always return false
 `use()`, `usev()`, `usex()` always return 1 (false). Correct for metadata
 extraction (no profile active), but ebuilds that conditionally set metadata
