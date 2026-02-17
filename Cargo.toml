@@ -15,6 +15,7 @@ portage-atom = "0.3.0"
 portage-metadata = "0.2.0"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt"] }
 regex = "1"
 thiserror = "2"

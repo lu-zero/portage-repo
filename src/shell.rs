@@ -8,6 +8,7 @@ use portage_metadata::{Eapi, EbuildMetadata, Phase};
 use crate::builtins;
 use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
+use crate::inherit;
 use crate::repository::Repository;
 
 /// Metadata variables extracted from a sourced ebuild.
@@ -95,8 +96,15 @@ impl EbuildShell {
             Vec::new()
         };
 
-        // Register Portage-specific shell functions (inherit, die, etc.)
+        // Register Portage-specific shell functions (die, EXPORT_FUNCTIONS, etc.)
         builtins::register(&mut shell).await?;
+
+        // Register `inherit` as a Rust builtin (avoids brush-core scoping bug
+        // where arrays become invisible after nested source calls in functions).
+        shell.register_builtin(
+            "inherit",
+            brush_core::builtins::builtin::<inherit::InheritCommand, _>(),
+        );
 
         let mut ebuild_shell = EbuildShell {
             shell,
@@ -219,8 +227,8 @@ impl EbuildShell {
             self.set_var("BROOT", "/");
         }
 
-        // Source the ebuild — `inherit` is a shell function that handles
-        // eclass sourcing, line continuations, and nesting naturally.
+        // Source the ebuild — `inherit` is a Rust builtin that handles
+        // eclass sourcing, PMS 10.2 accumulation, and nesting.
         let params = self.shell.default_exec_params();
         self.shell
             .source_script(ebuild.path(), std::iter::empty::<&str>(), &params)

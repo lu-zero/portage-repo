@@ -37,6 +37,7 @@ mod builtins;
 mod category;
 mod ebuild;
 mod error;
+mod inherit;
 mod layout;
 mod package;
 mod profile;

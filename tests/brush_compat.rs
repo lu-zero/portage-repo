@@ -305,6 +305,92 @@ async fn readonly_array() {
     assert_eq!(got, "a b c", "readonly array should preserve its values");
 }
 
+// ─── 6b. Multiline array with comments (real _MULTILIB_FLAGS pattern) ─
+//
+// Pattern:  TAB-indented entries, with #-commented lines inside
+// Used by:  multilib-build.eclass (_MULTILIB_FLAGS)
+// Impact:   empty _MULTILIB_FLAGS → empty IUSE for all multilib packages
+
+#[tokio::test]
+async fn multiline_array_with_comments() {
+    let (_tmp, mut shell) = test_shell().await;
+    // Use tabs like the real eclass does
+    let got = eval_var(
+        &mut shell,
+        "_MULTILIB_FLAGS=(\n\tabi_x86_32:x86\n\tabi_x86_64:amd64\n#\tabi_ppc_32:ppc\n#\tabi_ppc_64:ppc64\n\tabi_s390_32:s390\n)\n__OUT=\"${#_MULTILIB_FLAGS[@]} ${_MULTILIB_FLAGS[0]} ${_MULTILIB_FLAGS[2]}\"\n",
+    )
+    .await;
+    assert_eq!(
+        got, "3 abi_x86_32:x86 abi_s390_32:s390",
+        "multiline array with comments should have 3 elements"
+    );
+}
+
+#[tokio::test]
+async fn multiline_array_8_entries() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        "_MULTILIB_FLAGS=(\n\tabi_x86_32:x86,x86_fbsd\n\tabi_x86_64:amd64,amd64_fbsd\n\tabi_x86_x32:x32\n\tabi_mips_n32:n32\n\tabi_mips_n64:n64\n\tabi_mips_o32:o32\n\tabi_s390_32:s390\n\tabi_s390_64:s390x\n)\nreadonly _MULTILIB_FLAGS\n__OUT=\"${#_MULTILIB_FLAGS[@]}\"\n",
+    )
+    .await;
+    assert_eq!(
+        got, "8",
+        "multiline array with 8 entries should have count=8"
+    );
+}
+
+// ─── 6c. Array defined in sourced file via inherit mechanism ─────────
+//
+// Tests whether arrays assigned inside a `source`'d file (as happens
+// with eclass sourcing via `inherit`) retain their values after
+// a nested `source` call.
+
+#[tokio::test]
+async fn array_survives_nested_source() {
+    let (_tmp, mut shell) = test_shell().await;
+
+    // Create two files: inner.sh defines an array, then sources nested.sh,
+    // then a function reads the array.
+    let dir = _tmp.path();
+    let inner = dir.join("inner.sh");
+    let nested = dir.join("nested.sh");
+
+    // nested.sh does nothing interesting
+    std::fs::write(&nested, "NESTED_VAR=1\n").unwrap();
+
+    // inner.sh defines an array, sources nested.sh, then reads the array
+    std::fs::write(
+        &inner,
+        format!(
+            r#"
+MY_ARRAY=(
+	item1:val1
+	item2:val2
+	item3:val3
+)
+readonly MY_ARRAY
+source "{nested}"
+_set_result() {{
+    local flags=( "${{MY_ARRAY[@]%:*}}" )
+    __OUT="${{#MY_ARRAY[@]}} ${{flags[*]}}"
+}}
+_set_result
+unset -f _set_result
+"#,
+            nested = nested.display()
+        ),
+    )
+    .unwrap();
+
+    let _ = shell.source_make_defaults(&inner).await;
+    let got = shell.get_var("__OUT").unwrap_or_default();
+    assert_eq!(
+        got, "3 item1 item2 item3",
+        "array should survive nested source and be readable in function"
+    );
+}
+
 // ─── 7. local array with function-scope parameter expansion ─────────
 //
 // Pattern:  local flags=( "${ARRAY[@]%:*}" )
