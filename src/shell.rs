@@ -338,11 +338,13 @@ impl EbuildShell {
 
         // Compute DEFINED_PHASES by inspecting which phase functions are
         // defined in the shell after sourcing (PMS 7.4).
-        let defined_phases: Vec<Phase> = PHASE_FUNCTIONS
+        let mut defined_phases: Vec<Phase> = PHASE_FUNCTIONS
             .iter()
             .filter(|(name, _)| self.shell.funcs().get(name).is_some())
             .map(|(_, phase)| *phase)
             .collect();
+        // Sort alphabetically by short name to match Portage's cache format.
+        defined_phases.sort_by_key(|p| p.to_string());
 
         let mut metadata = entry.metadata;
         metadata.defined_phases = defined_phases;

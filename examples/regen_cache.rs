@@ -6,6 +6,10 @@ use portage_metadata::CacheEntry;
 use portage_repo::Repository;
 
 /// Fields to compare between sourced metadata and the md5-cache.
+///
+/// Note: `INHERITED` is intentionally excluded — the md5-cache format does
+/// not store it (it uses `_eclasses_` with checksums instead), so the
+/// reference value is always empty and comparison is meaningless.
 const COMPARE_KEYS: &[&str] = &[
     "EAPI",
     "DESCRIPTION",
@@ -23,7 +27,6 @@ const COMPARE_KEYS: &[&str] = &[
     "BDEPEND",
     "PDEPEND",
     "IDEPEND",
-    "INHERITED",
     "DEFINED_PHASES",
 ];
 
