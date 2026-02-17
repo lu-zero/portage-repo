@@ -89,12 +89,10 @@ async fn noop_default_assignment_already_set() {
     );
 }
 
-/// brush-core bug: nested double quotes with expansion inside ${:=} fails.
-/// `: "${VAR:="text ${EXPANSION}"}"` — the inner quotes + space confuse the parser.
-/// Without inner quotes (`: "${VAR:=text ${EXPANSION}}"`) it works fine.
-/// This affects ~9,716 ebuilds (acct-group, acct-user, etc.).
+/// Nested double quotes with expansion inside ${:=}.
+/// `: "${VAR:="text ${EXPANSION}"}"` — previously broke the parser,
+/// now fixed in the winnow parser.
 #[tokio::test]
-#[should_panic(expected = "should expand nested variables")]
 async fn noop_default_assignment_with_expansion() {
     let (_tmp, mut shell) = test_shell().await;
     let got = eval_var(
@@ -149,10 +147,10 @@ async fn noop_default_assignment_nested_double_quotes() {
     );
 }
 
-/// brush-core bug: nested double quotes with space inside ${:=} fails.
-/// `: "${VAR:="hello world"}"` — same root cause as above.
+/// Nested double quotes with space inside ${:=}.
+/// `: "${VAR:="hello world"}"` — previously broke the parser,
+/// now fixed in the winnow parser.
 #[tokio::test]
-#[should_panic(expected = "nested double quotes with space should work")]
 async fn noop_default_assignment_nested_quotes_concat() {
     let (_tmp, mut shell) = test_shell().await;
     let got = eval_var(
