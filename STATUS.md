@@ -30,8 +30,14 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 #### Embedded bash shell (PMS 10, 12)
 - Full embedded shell via brush-core with the winnow parser
 - Eclass sourcing via `inherit()` with `INHERITED` tracking and `ECLASS` scoping
+- PMS 10.2 eclass metadata key accumulation: `IUSE`, `REQUIRED_USE`, `DEPEND`,
+  `BDEPEND`, `RDEPEND`, `PDEPEND`, `IDEPEND` (all EAPIs), plus `PROPERTIES` and
+  `RESTRICT` (EAPI 8+) are saved/cleared/restored around each eclass `source`
 - `EXPORT_FUNCTIONS` phase alias creation
-- PM-provided variables: `CATEGORY`, `PN`, `PV`, `PVR`, `P`, `PF`, `FILESDIR`
+- PM-provided variables: `CATEGORY`, `PN`, `PV`, `PVR`, `P`, `PF`, `PR`, `FILESDIR`,
+  `EBUILD`, `WORKDIR`, `S`, `T`, `TMPDIR`, `HOME`, `D`, `DISTDIR`,
+  `EBUILD_PHASE`, `EBUILD_PHASE_FUNC`, `ROOT`, `MERGE_TYPE`,
+  `EPREFIX`/`ED`/`EROOT` (EAPI 3+), `SYSROOT`/`ESYSROOT`/`BROOT` (EAPI 7+)
 
 #### Metadata extraction (PMS 7, 14)
 - All 18 PMS metadata variables extracted after sourcing:
@@ -58,12 +64,9 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 ### Missing features
 
 #### PM-provided variables (PMS 11.1)
-Only `CATEGORY`, `PN`, `PV`, `PR`, `PVR`, `P`, `PF`, `FILESDIR` are set. Missing:
-- `WORKDIR`, `S`, `T`, `TMPDIR`, `HOME` — needed for ebuilds that reference
-  these at global scope
-- `D`, `ED`, `ROOT`, `EROOT`, `EPREFIX`, `DISTDIR` — phase-execution only
-- `SYSROOT`, `ESYSROOT`, `BROOT` — EAPI 7+
-- `EBUILD_PHASE`, `EBUILD_PHASE_FUNC`, `MERGE_TYPE`
+All global-scope PM-provided variables are now set.  Phase-specific accuracy
+is still approximate (e.g. `EBUILD_PHASE` is always `depend`, `MERGE_TYPE` is
+always `source`) since this codebase only does metadata extraction.
 
 #### Profile inheritance / stacking (PMS 5.1, 5.2.5)
 `Profile` reads files in isolation — no parent merging, no `-` prefix removal
@@ -91,11 +94,6 @@ USE_EXPAND variable descriptions not implemented.
 
 #### `profiles/updates/` directory (PMS 4.4.4)
 Package move/slotmove updates not implemented.
-
-#### Eclass metadata key accumulation (PMS 10.2)
-Eclasses that overwrite (rather than append to) `DEPEND`, `RDEPEND`, etc. are
-not corrected. PMS requires the PM to save/restore/append these keys across
-`inherit` calls.
 
 #### Legacy metadata cache format (PMS 14.2)
 Only md5-dict (`metadata/md5-cache/`) is supported. The positional line-based

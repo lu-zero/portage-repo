@@ -47,6 +47,8 @@ nonfatal() { "$@"; return 0; }
 # Eclass directories are communicated via the colon-separated
 # __PORTAGE_ECLASS_DIRS variable set by the Rust host.
 inherit() {
+    : "${__INHERIT_DEPTH:=0}"
+    __INHERIT_DEPTH=$(( __INHERIT_DEPTH + 1 ))
     local __eclass
     for __eclass in "$@"; do
         # Skip if already inherited
@@ -67,12 +69,47 @@ inherit() {
             die "inherit: eclass not found: ${__eclass}"
             return 1
         fi
+        # PMS 10.2: save and clear accumulating metadata keys
+        local __accum_vars="IUSE REQUIRED_USE DEPEND BDEPEND RDEPEND PDEPEND IDEPEND"
+        if [[ ${EAPI:-0} -ge 8 ]]; then
+            __accum_vars="${__accum_vars} PROPERTIES RESTRICT"
+        fi
+        local __var
+        for __var in ${__accum_vars}; do
+            eval "local __E_${__var}=\${${__var}-}"
+            eval "${__var}="
+        done
+
         local __prev_eclass="${ECLASS}"
         ECLASS="${__eclass}"
         source "${__eclass_file}" || die "inherit: failed to source ${__eclass}"
         ECLASS="${__prev_eclass}"
+
+        # PMS 10.2: restore accumulated values, appending eclass contribution
+        for __var in ${__accum_vars}; do
+            eval "${__var}=\${__E_${__var}}\${${__var}:+ \${${__var}}}"
+        done
+
         INHERITED="${INHERITED:+${INHERITED} }${__eclass}"
     done
+
+    # PMS 10.2: only the top-level inherit saves eclass-accumulated values
+    # and clears the vars so the ebuild body starts fresh.  Nested inherit
+    # calls (from within eclasses) must not touch __ECLASS_* globals —
+    # their contributions are already captured by the per-eclass
+    # save/restore cycle of the outer call.
+    __INHERIT_DEPTH=$(( __INHERIT_DEPTH - 1 ))
+    if [[ ${__INHERIT_DEPTH} -eq 0 ]]; then
+        local __accum_vars="IUSE REQUIRED_USE DEPEND BDEPEND RDEPEND PDEPEND IDEPEND"
+        if [[ ${EAPI:-0} -ge 8 ]]; then
+            __accum_vars="${__accum_vars} PROPERTIES RESTRICT"
+        fi
+        local __var
+        for __var in ${__accum_vars}; do
+            eval "__ECLASS_${__var}=\${${__var}}"
+            eval "${__var}="
+        done
+    fi
 }
 
 # EXPORT_FUNCTIONS: create phase aliases for the current eclass

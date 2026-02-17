@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use brush_builtins::ShellBuilderExt;
 use brush_core::parser::ParserImpl;
 use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable};
-use portage_metadata::{EbuildMetadata, Phase};
+use portage_metadata::{Eapi, EbuildMetadata, Phase};
 
 use crate::builtins;
 use crate::ebuild::Ebuild;
@@ -151,7 +151,7 @@ impl EbuildShell {
         let category = ebuild.category();
         let pn = ebuild.name();
         let version = ebuild.version();
-        let pv = version.to_string();
+        let pv = version.base().to_string();
         let pvr = if version.revision.0 > 0 {
             format!("{pv}-r{}", version.revision.0)
         } else {
@@ -182,6 +182,43 @@ impl EbuildShell {
         let eapi = ebuild.detect_eapi()?;
         self.set_var("EAPI", &eapi.to_string());
 
+        // Absolute path to the ebuild file (PMS 11.1)
+        let ebuild_path =
+            std::fs::canonicalize(ebuild.path()).unwrap_or_else(|_| ebuild.path().clone());
+        self.set_var("EBUILD", &ebuild_path.to_string_lossy());
+
+        // Build-directory variables (PMS 11.1)
+        // Deterministic placeholders — no temp directories are created.
+        let base = format!("/var/tmp/portage/{category}/{pf}");
+        let workdir = format!("{base}/work");
+        self.set_var("WORKDIR", &workdir);
+        self.set_var("S", &format!("{workdir}/{p}"));
+        self.set_var("T", &format!("{base}/temp"));
+        self.set_var("TMPDIR", &format!("{base}/temp"));
+        self.set_var("HOME", &format!("{base}/homedir"));
+        self.set_var("D", &format!("{base}/image/"));
+        self.set_var("DISTDIR", "/var/cache/distfiles");
+
+        // Phase/merge variables (PMS 11.1)
+        self.set_var("EBUILD_PHASE", "depend");
+        self.set_var("EBUILD_PHASE_FUNC", "");
+        self.set_var("ROOT", "/");
+        self.set_var("MERGE_TYPE", "source");
+
+        // EAPI 3+ prefix variables (PMS 11.1)
+        if eapi >= Eapi::Three {
+            self.set_var("EPREFIX", "");
+            self.set_var("ED", &format!("{base}/image/"));
+            self.set_var("EROOT", "/");
+        }
+
+        // EAPI 7+ sysroot variables (PMS 11.1)
+        if eapi >= Eapi::Seven {
+            self.set_var("SYSROOT", "/");
+            self.set_var("ESYSROOT", "/");
+            self.set_var("BROOT", "/");
+        }
+
         // Source the ebuild — `inherit` is a shell function that handles
         // eclass sourcing, line continuations, and nesting naturally.
         let params = self.shell.default_exec_params();
@@ -189,6 +226,46 @@ impl EbuildShell {
             .source_script(ebuild.path(), std::iter::empty::<&str>(), &params)
             .await
             .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path().display())))?;
+
+        // PMS 10.2: append eclass-accumulated values to ebuild-defined values.
+        // The `inherit` shell function saves each eclass's contribution into
+        // __ECLASS_VAR globals and clears the accumulating vars so the ebuild
+        // body writes only its own values.  We now combine them.
+        let accum_vars: &[&str] = if eapi >= Eapi::Eight {
+            &[
+                "IUSE",
+                "REQUIRED_USE",
+                "DEPEND",
+                "BDEPEND",
+                "RDEPEND",
+                "PDEPEND",
+                "IDEPEND",
+                "PROPERTIES",
+                "RESTRICT",
+            ]
+        } else {
+            &[
+                "IUSE",
+                "REQUIRED_USE",
+                "DEPEND",
+                "BDEPEND",
+                "RDEPEND",
+                "PDEPEND",
+                "IDEPEND",
+            ]
+        };
+        for var in accum_vars {
+            let ebuild_val = self.get_var(var).unwrap_or_default();
+            let eclass_var = format!("__ECLASS_{var}");
+            let eclass_val = self.get_var(&eclass_var).unwrap_or_default();
+            let combined = match (ebuild_val.is_empty(), eclass_val.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => eclass_val.trim().to_string(),
+                (false, true) => ebuild_val,
+                (false, false) => format!("{} {}", ebuild_val, eclass_val.trim()),
+            };
+            self.set_var(var, &combined);
+        }
 
         // Extract metadata, then override EAPI with the pre-detected value
         // (the authoritative source per PMS 7.3.1)
