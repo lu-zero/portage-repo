@@ -1,0 +1,420 @@
+//! Integration tests for bash constructs commonly used by Gentoo eclasses.
+//!
+//! These tests verify that brush-core handles the specific bash patterns
+//! found in Gentoo's eclass ecosystem.  Failures here indicate brush-core
+//! limitations that cause metadata extraction mismatches in `regen_cache`.
+
+use portage_repo::{EbuildShell, Repository};
+use tempfile::TempDir;
+
+/// Create a minimal repository and shell for testing.
+async fn test_shell() -> (TempDir, EbuildShell) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    // Minimal repo structure
+    std::fs::create_dir_all(root.join("metadata")).unwrap();
+    std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
+
+    let repo = Repository::open(root).unwrap();
+    let shell = repo.shell().await.unwrap();
+    (tmp, shell)
+}
+
+/// Source a bash script string in the shell and return the value of __OUT.
+async fn eval_var(shell: &mut EbuildShell, script: &str) -> String {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), script).unwrap();
+    let _ = shell.source_make_defaults(tmp.path()).await;
+    shell.get_var("__OUT").unwrap_or_default()
+}
+
+// ─── 1. Default assignment via no-op command ────────────────────────
+//
+// Pattern:  : "${VAR:=default}"
+// Used by:  acct-group.eclass, acct-user.eclass, mate-desktop.org.eclass,
+//           gstreamer-meson.eclass, out-of-source.eclass
+// Impact:   ~9,716 "missing DESCRIPTION" errors
+
+#[tokio::test]
+async fn noop_default_assignment_unset() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        unset MYVAR
+        : "${MYVAR:=hello world}"
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "hello world", ": \"${{VAR:=value}}\" should set unset var");
+}
+
+#[tokio::test]
+async fn noop_default_assignment_empty() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        MYVAR=""
+        : "${MYVAR:=fallback}"
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "fallback",
+        ": \"${{VAR:=value}}\" should set empty var"
+    );
+}
+
+#[tokio::test]
+async fn noop_default_assignment_already_set() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        MYVAR="existing"
+        : "${MYVAR:=fallback}"
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "existing",
+        ": \"${{VAR:=value}}\" should not overwrite existing var"
+    );
+}
+
+/// brush-core bug: nested double quotes with expansion inside ${:=} fails.
+/// `: "${VAR:="text ${EXPANSION}"}"` — the inner quotes + space confuse the parser.
+/// Without inner quotes (`: "${VAR:=text ${EXPANSION}}"`) it works fine.
+/// This affects ~9,716 ebuilds (acct-group, acct-user, etc.).
+#[tokio::test]
+#[should_panic(expected = "should expand nested variables")]
+async fn noop_default_assignment_with_expansion() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        PN="testpkg"
+        : "${DESCRIPTION:="System group: ${PN}"}"
+        __OUT="${DESCRIPTION}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "System group: testpkg",
+        ": \"${{VAR:=value}}\" should expand nested variables"
+    );
+}
+
+// Narrowing down: does the inner expansion work without nested quotes?
+#[tokio::test]
+async fn noop_default_assignment_expansion_no_inner_quotes() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        PN="testpkg"
+        : "${DESCRIPTION:=System group: ${PN}}"
+        __OUT="${DESCRIPTION}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "System group: testpkg",
+        ": \"${{VAR:=text ${{PN}}}}\" without inner quotes should work"
+    );
+}
+
+// Does it fail only with nested double quotes inside :=?
+#[tokio::test]
+async fn noop_default_assignment_nested_double_quotes() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        : "${MYVAR:="hello"}"
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "hello",
+        ": \"${{VAR:=\"literal\"}}\" nested double quotes should work"
+    );
+}
+
+/// brush-core bug: nested double quotes with space inside ${:=} fails.
+/// `: "${VAR:="hello world"}"` — same root cause as above.
+#[tokio::test]
+#[should_panic(expected = "nested double quotes with space should work")]
+async fn noop_default_assignment_nested_quotes_concat() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        : "${MYVAR:="hello world"}"
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "hello world",
+        ": \"${{VAR:=\"hello world\"}}\" nested double quotes with space should work"
+    );
+}
+
+// ─── 2. Array parameter expansion with suffix removal ───────────────
+//
+// Pattern:  "${array[@]%:*}"
+// Used by:  multilib-build.eclass, app-alternatives.eclass, sec-keys.eclass
+// Impact:   ~634 IUSE mismatches (multilib abi_* flags)
+
+#[tokio::test]
+async fn array_suffix_removal() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        ITEMS=("abi_x86_32:x86" "abi_x86_64:amd64" "abi_mips_n32:mips")
+        RESULT=( "${ITEMS[@]%:*}" )
+        __OUT="${RESULT[*]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "abi_x86_32 abi_x86_64 abi_mips_n32",
+        "\"${{array[@]%:*}}\" should remove suffix from each element"
+    );
+}
+
+#[tokio::test]
+async fn array_greedy_suffix_removal() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        ITEMS=("a:b:c" "x:y:z")
+        RESULT=( "${ITEMS[@]%%:*}" )
+        __OUT="${RESULT[*]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "a x",
+        "\"${{array[@]%%:*}}\" should greedily remove suffix from each element"
+    );
+}
+
+// ─── 3. Array parameter expansion with suffix append ────────────────
+//
+// Pattern:  "${array[@]/%/suffix}"
+// Used by:  multilib-build.eclass, python-r1.eclass, lua.eclass, ada.eclass
+// Impact:   IUSE, REQUIRED_USE computation for many eclasses
+
+#[tokio::test]
+async fn array_suffix_append() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        FLAGS=("flag1" "flag2" "flag3")
+        RESULT=( "${FLAGS[@]/%/(-)?}" )
+        __OUT="${RESULT[*]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "flag1(-)? flag2(-)? flag3(-)?",
+        "\"${{array[@]/%/suffix}}\" should append to each element"
+    );
+}
+
+// ─── 4. Array parameter expansion with prefix prepend ───────────────
+//
+// Pattern:  "${array[@]/#/prefix}"
+// Used by:  lua.eclass, llvm-r2.eclass, lua-single.eclass, wine.eclass
+// Impact:   USE flag target computation
+
+#[tokio::test]
+async fn array_prefix_prepend() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        IMPLS=("lua51" "lua52" "lua53")
+        RESULT=( "${IMPLS[@]/#/lua_targets_}" )
+        __OUT="${RESULT[*]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "lua_targets_lua51 lua_targets_lua52 lua_targets_lua53",
+        "\"${{array[@]/#/prefix}}\" should prepend to each element"
+    );
+}
+
+// ─── 5. Array in for loop with parameter expansion ──────────────────
+//
+// Pattern:  for x in "${array[@]%:*}"; do ...; done
+// Used by:  app-alternatives.eclass, sec-keys.eclass
+
+#[tokio::test]
+async fn for_loop_array_suffix_removal() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        ITEMS=("one:1" "two:2" "three:3")
+        __OUT=""
+        for item in "${ITEMS[@]%:*}"; do
+            __OUT="${__OUT:+${__OUT} }${item}"
+        done
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "one two three",
+        "for loop with \"${{array[@]%:*}}\" should iterate stripped elements"
+    );
+}
+
+// ─── 6. readonly arrays ─────────────────────────────────────────────
+//
+// Pattern:  readonly ARRAY
+// Used by:  multilib-build.eclass (_MULTILIB_FLAGS)
+// Impact:   needed for multilib-build to function correctly
+
+#[tokio::test]
+async fn readonly_array() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        FLAGS=("a" "b" "c")
+        readonly FLAGS
+        __OUT="${FLAGS[*]}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "a b c", "readonly array should preserve its values");
+}
+
+// ─── 7. local array with function-scope parameter expansion ─────────
+//
+// Pattern:  local flags=( "${ARRAY[@]%:*}" )
+// Used by:  multilib-build.eclass (_multilib_build_set_globals)
+// Impact:   direct cause of missing abi_* IUSE flags
+
+#[tokio::test]
+async fn local_array_from_expansion() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        _ITEMS=("abi_x86_32:x86" "abi_x86_64:amd64")
+        readonly _ITEMS
+
+        test_func() {
+            local flags=( "${_ITEMS[@]%:*}" )
+            IUSE=${flags[*]}
+        }
+        test_func
+        __OUT="${IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "abi_x86_32 abi_x86_64",
+        "local array from parameter expansion in function should work"
+    );
+}
+
+// ─── 8. Conditional default assignment ──────────────────────────────
+//
+// Pattern:  : "${VAR:=yes}"  then  [[ ${VAR} != "no" ]] && BDEPEND=...
+// Used by:  gnuconfig.eclass, autotools.eclass
+// Impact:   BDEPEND accumulation
+
+#[tokio::test]
+async fn conditional_default_and_test() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        : "${AUTO_DEPEND:=yes}"
+        [[ ${AUTO_DEPEND} != "no" ]] && RESULT="deps-here"
+        __OUT="${RESULT}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "deps-here",
+        "default assignment + conditional should work together"
+    );
+}
+
+// ─── 9. unset -f (function removal) ────────────────────────────────
+//
+// Pattern:  func() { ...; }; func; unset -f func
+// Used by:  multilib-build.eclass, python-utils-r1.eclass
+// Impact:   cleanup pattern used by many eclasses
+
+#[tokio::test]
+async fn unset_function() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        _setup() { MYVAR="from_func"; }
+        _setup
+        unset -f _setup
+        __OUT="${MYVAR}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "from_func",
+        "function should run before unset -f, var should persist"
+    );
+}
+
+// ─── 10. Complex multilib-build pattern (end-to-end) ────────────────
+//
+// This is the minimal reproduction of multilib-build.eclass's
+// _multilib_build_set_globals function.
+
+#[tokio::test]
+async fn multilib_build_set_globals_pattern() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        _MULTILIB_FLAGS=(
+            abi_x86_32:x86
+            abi_x86_64:amd64
+        )
+        readonly _MULTILIB_FLAGS
+
+        _multilib_build_set_globals() {
+            local flags=( "${_MULTILIB_FLAGS[@]%:*}" )
+            local usedeps=${flags[@]/%/(-)?}
+            IUSE=${flags[*]}
+            MULTILIB_USEDEP=${usedeps// /,}
+        }
+        _multilib_build_set_globals
+        unset -f _multilib_build_set_globals
+        __OUT="${IUSE}|${MULTILIB_USEDEP}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "abi_x86_32 abi_x86_64|abi_x86_32(-)?,abi_x86_64(-)?",
+        "multilib-build _set_globals pattern should produce correct IUSE and USEDEP"
+    );
+}
