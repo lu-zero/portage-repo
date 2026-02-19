@@ -505,3 +505,80 @@ async fn multilib_build_set_globals_pattern() {
         "multilib-build _set_globals pattern should produce correct IUSE and USEDEP"
     );
 }
+
+// ─── llvm-r1.eclass: _llvm_set_globals pattern ─────────────────────────────
+//
+// Two distinct brush behaviours are exercised:
+//   1. Brace expansion with two-digit bounds: ( {16..21} )
+//   2. Array element deletion via negative index: unset 'arr[-1]'
+//
+// Impact: wrong IUSE for every package using llvm-r1.eclass (e.g. postgresql)
+
+#[tokio::test]
+async fn brace_expansion_two_digit() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        arr=( {16..21} )
+        __OUT="${arr[@]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "16 17 18 19 20 21",
+        "brace expansion {{16..21}} must include 16"
+    );
+}
+
+#[tokio::test]
+async fn array_unset_negative_index() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        arr=(a b c d)
+        unset 'arr[-1]'
+        __OUT="${arr[@]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "a b c",
+        "unset 'arr[-1]' must remove the last element"
+    );
+}
+
+#[tokio::test]
+async fn llvm_set_globals_pattern() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        LLVM_COMPAT=( {16..21} )
+        _LLVM_NEWEST_STABLE=21
+        _LLVM_OLDEST_SLOT=15
+
+        stable=() unstable=()
+        for x in "${LLVM_COMPAT[@]}"; do
+            if [[ ${x} -gt ${_LLVM_NEWEST_STABLE} ]]; then
+                unstable+=( "${x}" )
+            elif [[ ${x} -ge ${_LLVM_OLDEST_SLOT} ]]; then
+                stable+=( "${x}" )
+            fi
+        done
+
+        IUSE="+llvm_slot_${stable[-1]}"
+        unset 'stable[-1]'
+        nondefault=( "${stable[@]}" "${unstable[@]}" )
+        IUSE+=" ${nondefault[*]/#/llvm_slot_}"
+        __OUT="${IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got,
+        "+llvm_slot_21 llvm_slot_16 llvm_slot_17 llvm_slot_18 llvm_slot_19 llvm_slot_20",
+        "llvm_set_globals pattern must produce correct IUSE with all slots"
+    );
+}
