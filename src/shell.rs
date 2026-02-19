@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use brush_builtins::ShellBuilderExt;
@@ -70,6 +71,9 @@ pub struct EbuildShell {
     shell: Shell,
     repo_path: PathBuf,
     eclass_dirs: Vec<PathBuf>,
+    /// Active USE flags for this shell session.
+    /// Used by the `use()`, `usev()`, `usex()` functions.
+    use_flags: HashSet<String>,
 }
 
 impl EbuildShell {
@@ -110,6 +114,7 @@ impl EbuildShell {
             shell,
             repo_path: repo.path().to_path_buf(),
             eclass_dirs,
+            use_flags: HashSet::new(),
         };
         ebuild_shell.sync_eclass_dirs_var();
 
@@ -329,6 +334,65 @@ impl EbuildShell {
         );
     }
 
+    /// Set the active USE flags for this shell session.
+    ///
+    /// These flags will be used by the `use()`, `usev()`, `usex()` functions
+    /// when sourcing ebuilds and eclasses.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use portage_repo::Repository;
+    ///
+    /// let repo = Repository::open("/var/db/repos/gentoo").unwrap();
+    /// let mut shell = repo.shell().await.unwrap();
+    /// shell.set_use_flags(&["ssl", "gtk", "-doc"]).unwrap();
+    /// ```
+    pub fn set_use_flags(&mut self, flags: &[&str]) -> Result<()> {
+        let mut new_flags = HashSet::new();
+
+        for flag in flags {
+            let flag_str = flag.trim();
+            if flag_str.is_empty() {
+                continue;
+            }
+
+            let (flag_name, enabled) = if let Some(stripped) = flag_str.strip_prefix('-') {
+                (stripped.to_string(), false)
+            } else if let Some(stripped) = flag_str.strip_prefix('+') {
+                (stripped.to_string(), true)
+            } else {
+                (flag_str.to_string(), true)
+            };
+
+            if enabled {
+                new_flags.insert(flag_name);
+            } else {
+                new_flags.remove(&flag_name);
+            }
+        }
+
+        self.use_flags = new_flags;
+
+        // Update the USE environment variable
+        let use_flags = self.use_flags_string();
+        if !use_flags.is_empty() {
+            self.set_var("USE", &use_flags);
+        } else {
+            self.set_var("USE", "");
+        }
+
+        Ok(())
+    }
+
+    /// Get the current USE flags as a space-separated string.
+    ///
+    /// This can be used to set the `USE` environment variable in the shell.
+    pub fn use_flags_string(&self) -> String {
+        let mut flags: Vec<_> = self.use_flags.iter().cloned().collect();
+        flags.sort();
+        flags.join(" ")
+    }
+
     /// Extract metadata from shell variables into a `CacheEntry`-compatible string
     /// and parse it via portage-metadata.
     fn extract_metadata(&self) -> Result<EbuildMetadata> {
@@ -357,5 +421,45 @@ impl EbuildShell {
         let mut metadata = entry.metadata;
         metadata.defined_phases = defined_phases;
         Ok(metadata)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_use_flags() {
+        let dir = tempdir().unwrap();
+        let repo_path = dir.path().to_path_buf();
+
+        // Create a minimal repository structure
+        std::fs::create_dir_all(repo_path.join("metadata")).unwrap();
+        std::fs::create_dir_all(repo_path.join("profiles")).unwrap();
+        std::fs::create_dir_all(repo_path.join("eclass")).unwrap();
+
+        // Write minimal layout.conf
+        std::fs::write(
+            repo_path.join("metadata").join("layout.conf"),
+            "masters = \ncache-formats = md5-dict\n",
+        )
+        .unwrap();
+
+        // Write repo_name
+        std::fs::write(repo_path.join("profiles").join("repo_name"), "test-repo\n").unwrap();
+
+        let repo = Repository::open(&repo_path).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+
+        // Test setting USE flags
+        shell.set_use_flags(&["ssl", "gtk", "-doc"]).unwrap();
+        assert_eq!(shell.use_flags_string(), "gtk ssl");
+
+        // Test that USE environment variable is set
+        let use_env = shell.get_var("USE").unwrap_or_default();
+        assert!(use_env.contains("ssl"));
+        assert!(use_env.contains("gtk"));
+        assert!(!use_env.contains("doc"));
     }
 }

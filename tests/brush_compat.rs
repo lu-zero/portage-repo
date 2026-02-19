@@ -50,7 +50,10 @@ async fn noop_default_assignment_unset() {
         "#,
     )
     .await;
-    assert_eq!(got, "hello world", ": \"${{VAR:=value}}\" should set unset var");
+    assert_eq!(
+        got, "hello world",
+        ": \"${{VAR:=value}}\" should set unset var"
+    );
 }
 
 #[tokio::test]

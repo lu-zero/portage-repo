@@ -96,14 +96,71 @@ hasv() {
 
 hasq() { has "$@"; }
 
-# ── Tier 3: USE flag queries (stubs for metadata extraction) ─────────
+# ── Tier 3: USE flag queries ────────────────────────────────────────
 
-use()        { return 1; }
-usev()       { return 1; }
-usex()       { [[ $# -ge 3 ]] && echo "$3" || echo "no"; return 1; }
-use_enable() { echo "--disable-${2:-$1}"; }
-use_with()   { echo "--without-${2:-$1}"; }
-in_iuse()    { has "$1" ${IUSE}; }
+# use: check if a USE flag is enabled
+# Returns 0 (true) if the flag is in USE, 1 (false) otherwise
+use() {
+    local flag="$1"
+    [[ -n "${USE}" && " ${USE} " == *" ${flag} "* ]]
+}
+
+# usev: check if a USE flag is enabled and return its value
+# Returns the flag name if enabled, empty string otherwise
+usev() {
+    local flag="$1"
+    if use "${flag}"; then
+        echo "${flag}"
+        return 0
+    else
+        echo ""
+        return 1
+    fi
+}
+
+# usex: conditional expression based on USE flag
+# Usage: usex flag value_if_enabled [value_if_disabled]
+# Returns the appropriate value and exit code
+usex() {
+    local flag="$1"
+    local yes="$2"
+    local no="$3"
+
+    if use "${flag}"; then
+        echo "${yes}"
+        return 0
+    else
+        echo "${no:-no}"
+        return 1
+    fi
+}
+
+# use_enable: return --enable or --disable based on USE flag
+use_enable() {
+    local flag="$1"
+    local opt="${2:-$1}"
+    if use "${flag}"; then
+        echo "--enable-${opt}"
+    else
+        echo "--disable-${opt}"
+    fi
+}
+
+# use_with: return --with or --without based on USE flag
+use_with() {
+    local flag="$1"
+    local opt="${2:-$1}"
+    if use "${flag}"; then
+        echo "--with-${opt}"
+    else
+        echo "--without-${opt}"
+    fi
+}
+
+# in_iuse: check if a flag is in IUSE
+in_iuse() {
+    has "$1" ${IUSE};
+}
 
 # ── Tier 4: version manipulation (EAPI 7+ PM-provided) ──────────────
 #
