@@ -30,6 +30,52 @@ const COMPARE_KEYS: &[&str] = &[
     "DEFINED_PHASES",
 ];
 
+/// Fields where token order does not affect semantic equivalence.
+///
+/// For these fields the comparison ignores ordering: two values are considered
+/// equal iff they contain the same tokens with the same frequencies (multiset
+/// equality).  Portage does not guarantee a stable ordering for dep specs and
+/// USE flags, so a pure string comparison would produce spurious diffs.
+const UNORDERED_KEYS: &[&str] = &[
+    "IUSE",
+    "KEYWORDS",
+    "REQUIRED_USE",
+    "RESTRICT",
+    "PROPERTIES",
+    "DEPEND",
+    "RDEPEND",
+    "BDEPEND",
+    "PDEPEND",
+    "IDEPEND",
+];
+
+/// Dep-spec structural tokens that may legitimately appear multiple times.
+const STRUCTURAL_TOKENS: &[&str] = &["(", ")", "||", "&&"];
+
+/// Build a token → count map for a whitespace-separated string.
+fn token_multiset<'a>(s: &'a str) -> BTreeMap<&'a str, usize> {
+    let mut map = BTreeMap::new();
+    for tok in s.split_whitespace() {
+        *map.entry(tok).or_insert(0) += 1;
+    }
+    map
+}
+
+/// Return non-structural tokens that appear more than once in `s`.
+fn find_duplicates(s: &str) -> Vec<String> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for tok in s.split_whitespace() {
+        if !STRUCTURAL_TOKENS.contains(&tok) {
+            *counts.entry(tok).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .filter(|(_, n)| *n > 1)
+        .map(|(tok, _)| tok.to_string())
+        .collect()
+}
+
 /// Parse a serialized cache string into a KEY→value map.
 fn parse_cache_map(serialized: &str) -> BTreeMap<&str, &str> {
     let mut map = BTreeMap::new();
@@ -255,7 +301,28 @@ async fn main() {
         for &key in COMPARE_KEYS {
             let ref_val = ref_map.get(key).copied().unwrap_or("");
             let src_val = src_map.get(key).copied().unwrap_or("");
-            if ref_val != src_val {
+
+            // For unordered fields, warn on duplicate tokens in the sourced
+            // value — repeated atoms in a dep spec are a code smell.
+            if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
+                let dups = find_duplicates(src_val);
+                if !dups.is_empty() {
+                    eprintln!(
+                        "\nWARN {cpv_str} {key}: duplicate tokens: {}",
+                        dups.join(", ")
+                    );
+                }
+            }
+
+            // For unordered fields compare token multisets (order-independent);
+            // for all others use exact string equality.
+            let differs = if UNORDERED_KEYS.contains(&key) {
+                token_multiset(ref_val) != token_multiset(src_val)
+            } else {
+                ref_val != src_val
+            };
+
+            if differs {
                 has_diff = true;
                 diffs.push(FieldDiff {
                     cpv: cpv_str.clone(),
