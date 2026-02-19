@@ -232,18 +232,10 @@ impl EbuildShell {
             self.set_var("BROOT", "/");
         }
 
-        // Source the ebuild — `inherit` is a Rust builtin that handles
-        // eclass sourcing, PMS 10.2 accumulation, and nesting.
-        let params = self.shell.default_exec_params();
-        self.shell
-            .source_script(ebuild.path(), std::iter::empty::<&str>(), &params)
-            .await
-            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path().display())))?;
-
-        // PMS 10.2: append eclass-accumulated values to ebuild-defined values.
-        // The `inherit` shell function saves each eclass's contribution into
-        // __ECLASS_VAR globals and clears the accumulating vars so the ebuild
-        // body writes only its own values.  We now combine them.
+        // PMS 10.2 accumulating variables (EAPI-dependent).
+        // Cleared before sourcing so the ebuild's inherit calls populate E_*
+        // from scratch.  Combined with ebuild values after sourcing.
+        // Mirrors Portage's B_*/E_* pattern in ebuild.sh.
         let accum_vars: &[&str] = if eapi >= Eapi::Eight {
             &[
                 "IUSE",
@@ -267,10 +259,31 @@ impl EbuildShell {
                 "IDEPEND",
             ]
         };
-        for var in accum_vars {
+
+        // Clear accumulating vars and their E_* counterparts before sourcing.
+        // The ebuild's own inherit calls will repopulate E_* during sourcing.
+        for &var in accum_vars {
+            self.set_var(var, "");
+            self.set_var(&format!("E_{var}"), "");
+        }
+        self.set_var("INHERITED", "");
+
+        // Source the ebuild — `inherit` is a Rust builtin that accumulates
+        // each eclass's contribution into E_{VAR} and restores the var after
+        // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
+        let params = self.shell.default_exec_params();
+        self.shell
+            .source_script(ebuild.path(), std::iter::empty::<&str>(), &params)
+            .await
+            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path().display())))?;
+
+        // PMS 10.2: combine ebuild-defined values with eclass contributions.
+        // After sourcing, `var` holds only what the ebuild set; `E_{var}` holds
+        // the total of all eclass contributions.  Append eclass total to ebuild value.
+        for &var in accum_vars {
             let ebuild_val = self.get_var(var).unwrap_or_default();
-            let eclass_var = format!("__ECLASS_{var}");
-            let eclass_val = self.get_var(&eclass_var).unwrap_or_default();
+            let e_var = format!("E_{var}");
+            let eclass_val = self.get_var(&e_var).unwrap_or_default();
             let combined = match (ebuild_val.is_empty(), eclass_val.is_empty()) {
                 (true, true) => String::new(),
                 (true, false) => eclass_val.trim().to_string(),
@@ -278,6 +291,7 @@ impl EbuildShell {
                 (false, false) => format!("{} {}", ebuild_val, eclass_val.trim()),
             };
             self.set_var(var, &combined);
+            self.set_var(&e_var, ""); // clean up E_*
         }
 
         // Extract metadata, then override EAPI with the pre-detected value
@@ -401,7 +415,14 @@ impl EbuildShell {
             if let Some(value) = self.get_var(var)
                 && !value.is_empty()
             {
-                cache_lines.push(format!("{var}={value}"));
+                // Normalize whitespace: bash values may contain embedded
+                // newlines and tabs from heredocs / multi-line assignments,
+                // but the portage cache format expects single-line values
+                // with space-separated atoms.
+                let normalized: String = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !normalized.is_empty() {
+                    cache_lines.push(format!("{var}={normalized}"));
+                }
             }
         }
 

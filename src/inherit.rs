@@ -47,14 +47,6 @@ impl builtins::Command for InheritCommand {
     ) -> Result<brush_core::ExecutionResult, Self::Error> {
         let shell = context.shell;
 
-        // Read __INHERIT_DEPTH, default to 0
-        let depth: u32 = shell
-            .env_str("__INHERIT_DEPTH")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let new_depth = depth + 1;
-        set_var(shell, "__INHERIT_DEPTH", &new_depth.to_string());
-
         // Determine EAPI for conditional accumulation vars
         let eapi: u32 = shell
             .env_str("EAPI")
@@ -96,7 +88,10 @@ impl builtins::Command for InheritCommand {
                 }
             };
 
-            // PMS 10.2: save current values and clear for this eclass
+            // PMS 10.2: save current accum var values (B_* pattern) and clear them.
+            // Each eclass sees empty vars, so its assignments are its own contribution.
+            // Prior accumulated values are restored afterwards; they are not visible
+            // to the eclass being sourced.
             let saved: Vec<(String, String)> = accum_vars
                 .iter()
                 .map(|&var| {
@@ -127,16 +122,26 @@ impl builtins::Command for InheritCommand {
             // Restore ECLASS
             set_var(shell, "ECLASS", &prev_eclass);
 
-            // PMS 10.2: read new contributions and combine saved + contribution
+            // PMS 10.2: append eclass contribution to E_{VAR} and restore B_*.
+            //
+            // Mirrors Portage's ebuild.sh pattern:
+            //   [[ -v VAR ]] && E_VAR+=" ${VAR}"
+            //   [[ -v B_VAR ]] && VAR="${B_VAR}" || unset VAR
+            //
+            // This preserves each eclass's independent contribution even when an
+            // eclass unconditionally assigns (rather than appends to) a variable.
             for (var, saved_val) in &saved {
                 let contribution = get_var(shell, var);
-                let combined = match (saved_val.is_empty(), contribution.is_empty()) {
-                    (true, true) => String::new(),
+                let e_var = format!("E_{var}");
+                let e_val = get_var(shell, &e_var);
+                let new_e_val = match (e_val.is_empty(), contribution.is_empty()) {
+                    (_, true) => e_val,
                     (true, false) => contribution,
-                    (false, true) => saved_val.clone(),
-                    (false, false) => format!("{saved_val} {contribution}"),
+                    (false, false) => format!("{e_val} {contribution}"),
                 };
-                set_var(shell, var, &combined);
+                set_var(shell, &e_var, &new_e_val);
+                // Restore saved (B_*) value
+                set_var(shell, var, saved_val);
             }
 
             // Append to INHERITED
@@ -146,20 +151,6 @@ impl builtins::Command for InheritCommand {
                 inherited = format!("{inherited} {eclass}");
             }
             set_var(shell, "INHERITED", &inherited);
-        }
-
-        // Decrement depth
-        let final_depth = new_depth - 1;
-        set_var(shell, "__INHERIT_DEPTH", &final_depth.to_string());
-
-        // At depth 0: save accumulated values to __ECLASS_* and clear
-        if final_depth == 0 {
-            for &var in &accum_vars {
-                let val = get_var(shell, var);
-                let eclass_key = format!("__ECLASS_{var}");
-                set_var(shell, &eclass_key, &val);
-                set_var(shell, var, "");
-            }
         }
 
         Ok(brush_core::ExecutionResult::success())
