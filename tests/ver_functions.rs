@@ -7,20 +7,29 @@
 use portage_repo::{EbuildShell, Repository};
 use tempfile::TempDir;
 
-/// Create a minimal repository and shell for testing ver_* functions.
-async fn test_shell() -> (TempDir, EbuildShell) {
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
+/// Minimal repo dir shared across all tests — created once, never deleted.
+/// The ver_* tests only need a shell with builtins loaded; no repo files
+/// are accessed after shell construction.
+static TEST_REPO: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
 
-    // Minimal repo structure
-    std::fs::create_dir_all(root.join("metadata")).unwrap();
-    std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
-    std::fs::create_dir_all(root.join("profiles")).unwrap();
-    std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
+fn test_repo_dir() -> &'static std::path::Path {
+    TEST_REPO
+        .get_or_init(|| {
+            let tmp = TempDir::new().unwrap();
+            let root = tmp.path();
+            std::fs::create_dir_all(root.join("metadata")).unwrap();
+            std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+            std::fs::create_dir_all(root.join("profiles")).unwrap();
+            std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
+            tmp
+        })
+        .path()
+}
 
-    let repo = Repository::open(root).unwrap();
-    let shell = repo.shell().await.unwrap();
-    (tmp, shell)
+/// Create a shell for testing ver_* functions.
+async fn test_shell() -> EbuildShell {
+    let repo = Repository::open(test_repo_dir()).unwrap();
+    repo.shell().await.unwrap()
 }
 
 /// Source a bash script string in the shell.
@@ -51,7 +60,7 @@ macro_rules! ver_cut_test {
     ($name:ident, $expected:expr, $range:expr, $version:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_tmp, mut shell) = test_shell().await;
+            let mut shell = test_shell().await;
             let got = eval(&mut shell, &format!("ver_cut {} {}", $range, $version)).await;
             assert_eq!(
                 got, $expected,
@@ -81,7 +90,7 @@ macro_rules! ver_rs_test {
     ($name:ident, $expected:expr, $($args:expr),+) => {
         #[tokio::test]
         async fn $name() {
-            let (_tmp, mut shell) = test_shell().await;
+            let mut shell = test_shell().await;
             let args = vec![$($args),+];
             let cmd = format!("ver_rs {}", args.join(" "));
             let got = eval(&mut shell, &cmd).await;
@@ -126,21 +135,21 @@ ver_cut_test!(ver_cut_trunc_2_5, "2.3", "2-5", "1.2.3");
 
 #[tokio::test]
 async fn ver_cut_trunc_4() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_cut 4 1.2.3").await;
     assert_eq!(got, "");
 }
 
 #[tokio::test]
 async fn ver_cut_trunc_0() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_cut 0 1.2.3").await;
     assert_eq!(got, "");
 }
 
 #[tokio::test]
 async fn ver_cut_trunc_4_end() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_cut 4- 1.2.3").await;
     assert_eq!(got, "");
 }
@@ -155,21 +164,21 @@ ver_rs_test!(ver_rs_trunc_3_5, "1.2.3", "3-5", ".", "1.2.3");
 
 #[tokio::test]
 async fn ver_cut_die_foo() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_cut foo 1.2.3 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
 
 #[tokio::test]
 async fn ver_rs_die_negative() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_rs -3 _ a1b2c3d4e5 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
 
 #[tokio::test]
 async fn ver_rs_die_reversed() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_rs 5-3 _ a1b2c3d4e5 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
@@ -180,7 +189,7 @@ macro_rules! ver_test_case {
     ($name:ident, $expected:expr, $v1:expr, $op:expr, $v2:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_tmp, mut shell) = test_shell().await;
+            let mut shell = test_shell().await;
             let code = exit_code(&mut shell, &format!("ver_test {} {} {}", $v1, $op, $v2)).await;
             assert_eq!(
                 code, $expected,
@@ -316,21 +325,21 @@ ver_test_case!(vt_add_0_lt_2pow63, 0, "0", "-lt", "9223372036854775808");
 
 #[tokio::test]
 async fn ver_test_die_1_arg() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_test 1 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
 
 #[tokio::test]
 async fn ver_test_die_4_args() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_test 1 -lt 2 3 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
 
 #[tokio::test]
 async fn ver_test_die_op_first() {
-    let (_tmp, mut shell) = test_shell().await;
+    let mut shell = test_shell().await;
     let got = eval(&mut shell, "ver_test -lt 1 2 2>&1").await;
     assert!(got.starts_with("die:"), "expected die, got: {got}");
 }
@@ -341,7 +350,7 @@ macro_rules! ver_test_die_op {
     ($name:ident, $op:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_tmp, mut shell) = test_shell().await;
+            let mut shell = test_shell().await;
             let got = eval(&mut shell, &format!("ver_test 1 {} 2 2>&1", $op)).await;
             assert!(
                 got.starts_with("die:"),
@@ -362,7 +371,7 @@ macro_rules! ver_test_die_version {
     ($name:ident, $bad_ver:expr) => {
         #[tokio::test]
         async fn $name() {
-            let (_tmp, mut shell) = test_shell().await;
+            let mut shell = test_shell().await;
             let got = eval(&mut shell, &format!("ver_test {} -ne 1 2>&1", $bad_ver)).await;
             assert!(
                 got.starts_with("die:"),
