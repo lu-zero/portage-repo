@@ -25,9 +25,7 @@ async fn test_shell() -> (TempDir, EbuildShell) {
 
 /// Source a bash script string in the shell.
 async fn run_script(shell: &mut EbuildShell, script: &str) {
-    let tmp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(tmp.path(), script).unwrap();
-    let _ = shell.source_make_defaults(tmp.path()).await;
+    let _ = shell.run_string(script).await;
 }
 
 /// Run a bash expression and return its stdout (trimmed).

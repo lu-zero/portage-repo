@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use brush_builtins::ShellBuilderExt;
 use brush_core::parser::ParserImpl;
-use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable};
+use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo};
 use portage_metadata::{Eapi, EbuildMetadata, Phase};
 
 use crate::builtins;
@@ -348,6 +348,17 @@ impl EbuildShell {
         );
     }
 
+    /// Run a bash script string directly in the shell without writing a temporary file.
+    pub async fn run_string(&mut self, script: &str) -> Result<()> {
+        let params = self.shell.default_exec_params();
+        let source_info = SourceInfo::from("inline");
+        self.shell
+            .run_string(script, &source_info, &params)
+            .await
+            .map_err(|e| Error::Shell(format!("run_string: {e}")))?;
+        Ok(())
+    }
+
     /// Set the active USE flags for this shell session.
     ///
     /// These flags will be used by the `use()`, `usev()`, `usex()` functions
@@ -357,9 +368,11 @@ impl EbuildShell {
     /// ```no_run
     /// use portage_repo::Repository;
     ///
+    /// # async fn example() {
     /// let repo = Repository::open("/var/db/repos/gentoo").unwrap();
     /// let mut shell = repo.shell().await.unwrap();
     /// shell.set_use_flags(&["ssl", "gtk", "-doc"]).unwrap();
+    /// # }
     /// ```
     pub fn set_use_flags(&mut self, flags: &[&str]) -> Result<()> {
         let mut new_flags = HashSet::new();
