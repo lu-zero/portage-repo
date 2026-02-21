@@ -7,6 +7,20 @@
 use portage_repo::{EbuildShell, Repository};
 use tempfile::TempDir;
 
+/// Raise the process soft fd limit to the hard limit once per test binary.
+/// The default macOS soft limit (256) is too low for 124 concurrent shells,
+/// each of which clones stdin/stdout/stderr during brush initialisation.
+fn raise_fd_limit() {
+    #[cfg(unix)]
+    unsafe {
+        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
+            rlim.rlim_cur = rlim.rlim_max;
+            libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);
+        }
+    }
+}
+
 /// Minimal repo dir shared across all tests — created once, never deleted.
 /// The ver_* tests only need a shell with builtins loaded; no repo files
 /// are accessed after shell construction.
@@ -15,6 +29,7 @@ static TEST_REPO: std::sync::OnceLock<TempDir> = std::sync::OnceLock::new();
 fn test_repo_dir() -> &'static std::path::Path {
     TEST_REPO
         .get_or_init(|| {
+            raise_fd_limit();
             let tmp = TempDir::new().unwrap();
             let root = tmp.path();
             std::fs::create_dir_all(root.join("metadata")).unwrap();
