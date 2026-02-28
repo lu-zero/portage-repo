@@ -208,7 +208,10 @@ impl EbuildShell {
         self.set_var("S", &format!("{workdir}/{p}"));
         self.set_var("T", &format!("{base}/temp"));
         self.set_var("TMPDIR", &format!("{base}/temp"));
-        self.set_var("HOME", &format!("{base}/homedir"));
+        // Portage uses /tmp as HOME during metadata extraction (depend phase).
+        // Using the per-build homedir path causes $HOME expansions in variables
+        // like DESCRIPTION to differ from the cached values.
+        self.set_var("HOME", "/tmp");
         self.set_var("D", &format!("{base}/image/"));
         self.set_var("DISTDIR", "/var/cache/distfiles");
 
