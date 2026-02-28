@@ -8,6 +8,7 @@ cargo clippy -- -D warnings       # Lint — must be warning-free
 cargo fmt --check                 # Format check — must pass
 cargo doc --no-deps               # Build docs — must have no warnings
 cargo run --example enumerate_repo -- /path/to/repo  # Smoke-test the example
+cargo run --release --example regen_cache -- /path/to/repo  # Regenerate metadata cache
 ```
 
 ## Architecture
@@ -66,7 +67,9 @@ Do not assume existing patterns are correct; verify against the PMS.
 ## Debugging parsing issues
 
 If either an ebuild or an eclass do not parse correctly, we may have found a bug in the
-parser we use, `brush`.
+parser we use, `brush`. Its sources are in `../brush` the binary is often in
+`../brush/target/debug/brush`. You might have to rebuild it to make sure it matches
+the current codebase.
 
 To confirm the problem and create a minimal test case:
 

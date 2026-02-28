@@ -11,8 +11,8 @@ keywords = ["gentoo", "portage", "repository", "pms"]
 categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
-portage-atom = "0.3.0"
-portage-metadata = "0.2.0"
+portage-atom = "0.3.1"
+portage-metadata = "0.2.1"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
 clap = { version = "4", features = ["derive"] }
