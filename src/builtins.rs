@@ -39,11 +39,7 @@ shopt -s dotglob
 
 # ── Tier 1: critical for eclass/ebuild sourcing ──────────────────────
 
-# die: abort with error message
-die() {
-    echo "die: $*" >&2
-    return 1
-}
+# die — implemented as a Rust builtin (pms_builtins.rs)
 
 # nonfatal: run command, ignore failure
 nonfatal() { "$@"; return 0; }
