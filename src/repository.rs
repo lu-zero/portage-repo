@@ -1,10 +1,12 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv};
 use portage_metadata::CacheEntry;
 
 use crate::category::Category;
+use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
 use crate::layout::LayoutConf;
 use crate::profile::{Profile, ProfileDesc};
@@ -74,6 +76,59 @@ impl Repository {
                 Category::new(name, cat_path)
             })
             .collect())
+    }
+
+    /// List all ebuilds in the repository using parallel directory walking.
+    ///
+    /// Uses [`jwalk`] to walk category directories concurrently, collecting
+    /// all `.ebuild` files. Only categories listed in `profiles/categories`
+    /// are visited. Results are sorted by CPV.
+    ///
+    /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn ebuilds(&self) -> Result<Vec<Ebuild>> {
+        let categories: HashSet<String> = util::read_lines(
+            &self.path.join("profiles").join("categories"),
+        )?
+        .into_iter()
+        .collect();
+
+        let mut ebuilds: Vec<Ebuild> = WalkDir::new(&self.path)
+            .min_depth(3)
+            .max_depth(3)
+            .process_read_dir(move |depth, _path, _state, children| {
+                children.retain(|entry| {
+                    entry.as_ref().is_ok_and(|e| {
+                        let name = e.file_name();
+                        let name = name.to_string_lossy();
+                        match depth {
+                            // root entry itself — always keep
+                            None => true,
+                            // reading root dir → category dirs
+                            Some(0) => categories.contains(name.as_ref()),
+                            // reading category dir → package dirs
+                            Some(1) => !name.starts_with('.'),
+                            // reading package dir → ebuild files
+                            _ => name.ends_with(".ebuild"),
+                        }
+                    })
+                });
+            })
+            .into_iter()
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                let stem = path.file_name()?.to_string_lossy();
+                let stem = stem.strip_suffix(".ebuild")?;
+                let cat_name = path.parent()?.parent()?.file_name()?.to_string_lossy();
+
+                let cpv_str = format!("{cat_name}/{stem}");
+                let cpv = Cpv::parse(&cpv_str).ok()?;
+                Some(Ebuild::new(cpv, path))
+            })
+            .collect();
+
+        ebuilds.sort_by(|a, b| a.cpv().cmp(b.cpv()));
+        Ok(ebuilds)
     }
 
     /// Look up a single category by name.

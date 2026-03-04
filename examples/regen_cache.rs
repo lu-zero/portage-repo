@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::process;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use portage_metadata::CacheEntry;
-use portage_repo::Repository;
+use portage_repo::{Ebuild, Repository};
 
 /// Fields to compare between sourced metadata and the md5-cache.
 ///
@@ -101,12 +103,23 @@ fn matches_filter(cpv: &str, filter: &str) -> bool {
     }
 }
 
+#[derive(Default)]
 struct Stats {
     total: usize,
     success: usize,
     errors: usize,
     mismatches: usize,
     missing_cache: usize,
+}
+
+impl Stats {
+    fn merge(&mut self, other: Stats) {
+        self.total += other.total;
+        self.success += other.success;
+        self.errors += other.errors;
+        self.mismatches += other.mismatches;
+        self.missing_cache += other.missing_cache;
+    }
 }
 
 struct FieldDiff {
@@ -116,9 +129,110 @@ struct FieldDiff {
     got: String,
 }
 
+/// Process a single ebuild: create shell, source, compare against cache.
+async fn process_ebuild(
+    repo: &Repository,
+    masters: &[Repository],
+    ebuild: &Ebuild,
+    progress: &AtomicUsize,
+    total: usize,
+) -> (Stats, Vec<FieldDiff>) {
+    let mut stats = Stats::default();
+    let mut diffs = Vec::new();
+    stats.total = 1;
+
+    let cpv = ebuild.cpv();
+    let cpv_str = cpv.to_string();
+    let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
+    eprint!("\r[{i}/{total}] {cpv_str:<60}");
+
+    // Create a fresh shell for each ebuild (sourcing is not idempotent).
+    let master_refs: Vec<&Repository> = masters.iter().collect();
+    let mut shell = match repo.shell_with_masters(&master_refs).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("\nERROR creating shell for {cpv_str}: {e}");
+            stats.errors += 1;
+            return (stats, diffs);
+        }
+    };
+
+    // Source the ebuild.
+    let metadata = match shell.source_ebuild(ebuild).await {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("\nERROR sourcing {cpv_str}: {e}");
+            stats.errors += 1;
+            return (stats, diffs);
+        }
+    };
+
+    // Read the reference cache entry.
+    let reference = match repo.cache_entry(cpv) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("\nMISSING cache for {cpv_str}");
+            stats.missing_cache += 1;
+            stats.success += 1;
+            return (stats, diffs);
+        }
+    };
+
+    // Build a CacheEntry from the sourced metadata and serialize both.
+    let sourced_entry = CacheEntry {
+        metadata,
+        md5: None,
+        eclasses: vec![],
+    };
+
+    let ref_serialized = reference.serialize();
+    let src_serialized = sourced_entry.serialize();
+
+    let ref_map = parse_cache_map(&ref_serialized);
+    let src_map = parse_cache_map(&src_serialized);
+
+    let mut has_diff = false;
+    for &key in COMPARE_KEYS {
+        let ref_val = ref_map.get(key).copied().unwrap_or("");
+        let src_val = src_map.get(key).copied().unwrap_or("");
+
+        if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
+            let dups = find_duplicates(src_val);
+            if !dups.is_empty() {
+                eprintln!(
+                    "\nWARN {cpv_str} {key}: duplicate tokens: {}",
+                    dups.join(", ")
+                );
+            }
+        }
+
+        let differs = if UNORDERED_KEYS.contains(&key) {
+            token_multiset(ref_val) != token_multiset(src_val)
+        } else {
+            ref_val != src_val
+        };
+
+        if differs {
+            has_diff = true;
+            diffs.push(FieldDiff {
+                cpv: cpv_str.clone(),
+                key: key.to_string(),
+                expected: ref_val.to_string(),
+                got: src_val.to_string(),
+            });
+        }
+    }
+
+    if has_diff {
+        stats.mismatches += 1;
+    }
+    stats.success += 1;
+    (stats, diffs)
+}
+
 /// Regenerate metadata cache and compare against existing md5-cache.
 ///
-/// Usage: regen_cache <repo-path> [filter] [--repos-dir <dir>]
+/// Usage: regen_cache <repo-path> [filter] [--repos-dir <dir>] [--jobs <N>]
 ///
 /// If `--repos-dir` is given, master repositories listed in `layout.conf`
 /// are resolved from that directory and their eclasses are available to
@@ -128,12 +242,13 @@ struct FieldDiff {
 ///   regen_cache gentoo
 ///   regen_cache gentoo 'dev-lang/*'
 ///   regen_cache /var/db/repos/my-overlay --repos-dir /var/db/repos
-#[tokio::main(flavor = "current_thread")]
+///   regen_cache gentoo --jobs 8
+#[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "Usage: {} <repo-path> [filter] [--repos-dir <dir>]",
+            "Usage: {} <repo-path> [filter] [--repos-dir <dir>] [--jobs <N>]",
             args[0]
         );
         eprintln!();
@@ -148,21 +263,41 @@ async fn main() {
     }
     let repo_path = &args[1];
 
-    // Parse optional --repos-dir and filter from remaining args.
-    let mut filter: Option<&str> = None;
+    // Parse optional --repos-dir, --jobs, and filter from remaining args.
+    let mut filter: Option<String> = None;
     let mut repos_dir: Option<&str> = None;
+    let mut jobs: usize = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
     let mut i = 2;
     while i < args.len() {
-        if args[i] == "--repos-dir" {
-            i += 1;
-            if i < args.len() {
-                repos_dir = Some(&args[i]);
-            } else {
-                eprintln!("--repos-dir requires an argument");
-                process::exit(2);
+        match args[i].as_str() {
+            "--repos-dir" => {
+                i += 1;
+                if i < args.len() {
+                    repos_dir = Some(&args[i]);
+                } else {
+                    eprintln!("--repos-dir requires an argument");
+                    process::exit(2);
+                }
             }
-        } else if filter.is_none() {
-            filter = Some(&args[i]);
+            "--jobs" => {
+                i += 1;
+                if i < args.len() {
+                    jobs = args[i].parse().unwrap_or_else(|_| {
+                        eprintln!("--jobs requires a number");
+                        process::exit(2);
+                    });
+                } else {
+                    eprintln!("--jobs requires an argument");
+                    process::exit(2);
+                }
+            }
+            _ => {
+                if filter.is_none() {
+                    filter = Some(args[i].clone());
+                }
+            }
         }
         i += 1;
     }
@@ -192,151 +327,68 @@ async fn main() {
     };
 
     // Collect all ebuilds (with optional filtering) so we know the total count.
-    let categories = match repo.categories() {
-        Ok(c) => c,
+    eprintln!("Collecting ebuilds...");
+    let mut ebuilds = match repo.ebuilds() {
+        Ok(e) => e,
         Err(e) => {
-            eprintln!("Error reading categories: {e}");
+            eprintln!("Error collecting ebuilds: {e}");
             process::exit(1);
         }
     };
 
-    eprintln!("Collecting ebuilds...");
-    let mut ebuilds = Vec::new();
-    for cat in &categories {
-        let packages = match cat.packages() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Warning: skipping category {}: {e}", cat.name());
-                continue;
-            }
-        };
-        for pkg in &packages {
-            let pkg_ebuilds = match pkg.ebuilds() {
-                Ok(e) => e,
-                Err(e) => {
-                    eprintln!(
-                        "Warning: skipping package {}/{}: {e}",
-                        cat.name(),
-                        pkg.name()
-                    );
-                    continue;
-                }
-            };
-            for ebuild in pkg_ebuilds {
-                let cpv_str = ebuild.cpv().to_string();
-                if let Some(f) = filter {
-                    if !matches_filter(&cpv_str, f) {
-                        continue;
-                    }
-                }
-                ebuilds.push(ebuild);
-            }
-        }
+    if let Some(ref f) = filter {
+        ebuilds.retain(|eb| matches_filter(&eb.cpv().to_string(), f));
     }
 
     let total = ebuilds.len();
-    eprintln!("Found {total} ebuilds to process.");
+    eprintln!("Found {total} ebuilds to process with {jobs} workers.");
 
-    let mut stats = Stats {
-        total,
-        success: 0,
-        errors: 0,
-        mismatches: 0,
-        missing_cache: 0,
-    };
-    let mut diffs: Vec<FieldDiff> = Vec::new();
+    // Feed ebuilds to async workers via flume.
+    let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
+    let repo = Arc::new(repo);
+    let masters = Arc::new(masters);
+    let progress = Arc::new(AtomicUsize::new(0));
 
-    for (i, ebuild) in ebuilds.iter().enumerate() {
-        let cpv = ebuild.cpv();
-        let cpv_str = cpv.to_string();
-        eprint!("\r[{}/{}] {}", i + 1, total, cpv_str);
-
-        // Create a fresh shell for each ebuild (sourcing is not idempotent).
-        let master_refs: Vec<&Repository> = masters.iter().collect();
-        let mut shell = match repo.shell_with_masters(&master_refs).await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("\nERROR creating shell for {cpv_str}: {e}");
-                stats.errors += 1;
-                continue;
+    // Spawn worker tasks.
+    let mut handles = Vec::new();
+    for _ in 0..jobs {
+        let rx = rx.clone();
+        let repo = Arc::clone(&repo);
+        let masters = Arc::clone(&masters);
+        let progress = Arc::clone(&progress);
+        handles.push(tokio::spawn(async move {
+            let mut stats = Stats::default();
+            let mut diffs = Vec::new();
+            while let Ok(ebuild) = rx.recv_async().await {
+                let (s, d) = process_ebuild(&repo, &masters, &ebuild, &progress, total).await;
+                stats.merge(s);
+                diffs.extend(d);
             }
-        };
+            (stats, diffs)
+        }));
+    }
+    // No more receivers needed in main — drop so workers exit when queue drains.
+    drop(rx);
 
-        // Source the ebuild.
-        let metadata = match shell.source_ebuild(ebuild).await {
-            Ok(m) => m,
-            Err(e) => {
-                eprintln!("\nERROR sourcing {cpv_str}: {e}");
-                stats.errors += 1;
-                continue;
-            }
-        };
-
-        // Read the reference cache entry.
-        let reference = match repo.cache_entry(cpv) {
-            Ok(c) => c,
-            Err(_) => {
-                eprintln!("\nMISSING cache for {cpv_str}");
-                stats.missing_cache += 1;
-                // Still counts as "success" for sourcing — just can't compare.
-                stats.success += 1;
-                continue;
-            }
-        };
-
-        // Build a CacheEntry from the sourced metadata and serialize both.
-        let sourced_entry = CacheEntry {
-            metadata,
-            md5: None,
-            eclasses: vec![],
-        };
-
-        let ref_serialized = reference.serialize();
-        let src_serialized = sourced_entry.serialize();
-
-        let ref_map = parse_cache_map(&ref_serialized);
-        let src_map = parse_cache_map(&src_serialized);
-
-        let mut has_diff = false;
-        for &key in COMPARE_KEYS {
-            let ref_val = ref_map.get(key).copied().unwrap_or("");
-            let src_val = src_map.get(key).copied().unwrap_or("");
-
-            // For unordered fields, warn on duplicate tokens in the sourced
-            // value — repeated atoms in a dep spec are a code smell.
-            if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
-                let dups = find_duplicates(src_val);
-                if !dups.is_empty() {
-                    eprintln!(
-                        "\nWARN {cpv_str} {key}: duplicate tokens: {}",
-                        dups.join(", ")
-                    );
-                }
-            }
-
-            // For unordered fields compare token multisets (order-independent);
-            // for all others use exact string equality.
-            let differs = if UNORDERED_KEYS.contains(&key) {
-                token_multiset(ref_val) != token_multiset(src_val)
-            } else {
-                ref_val != src_val
-            };
-
-            if differs {
-                has_diff = true;
-                diffs.push(FieldDiff {
-                    cpv: cpv_str.clone(),
-                    key: key.to_string(),
-                    expected: ref_val.to_string(),
-                    got: src_val.to_string(),
-                });
-            }
+    // Send ebuilds from the collected vec.
+    for ebuild in ebuilds {
+        if tx.send(ebuild).is_err() {
+            break; // all workers gone
         }
+    }
+    drop(tx);
 
-        if has_diff {
-            stats.mismatches += 1;
-        }
-        stats.success += 1;
+    // Collect results.
+    let mut stats = Stats::default();
+    stats.total = total;
+    let mut diffs = Vec::new();
+    for handle in handles {
+        let (s, d) = handle.await.unwrap();
+        stats.success += s.success;
+        stats.errors += s.errors;
+        stats.mismatches += s.mismatches;
+        stats.missing_cache += s.missing_cache;
+        diffs.extend(d);
     }
 
     // Clear the progress line.
@@ -344,6 +396,7 @@ async fn main() {
 
     // Print diff summary.
     if !diffs.is_empty() {
+        diffs.sort_by(|a, b| a.cpv.cmp(&b.cpv).then(a.key.cmp(&b.key)));
         eprintln!("=== Field diffs ===");
         for d in &diffs {
             eprintln!("DIFF {} {}:", d.cpv, d.key);
