@@ -38,7 +38,14 @@ const COMPARE_KEYS: &[&str] = &[
 /// equal iff they contain the same tokens with the same frequencies (multiset
 /// equality).  Portage does not guarantee a stable ordering for dep specs and
 /// USE flags, so a pure string comparison would produce spurious diffs.
+///
+/// SRC_URI and LICENSE are also included: ebuilds often build these by
+/// iterating associative-array keys/values whose traversal order is
+/// implementation-defined (bash's hash order vs. brush's order differ).
+/// Portage itself treats both fields as unordered sets at install time.
 const UNORDERED_KEYS: &[&str] = &[
+    "SRC_URI",
+    "LICENSE",
     "IUSE",
     "KEYWORDS",
     "REQUIRED_USE",
