@@ -40,10 +40,12 @@ mod error;
 mod inherit;
 mod layout;
 mod package;
+mod pms_builtins;
 mod profile;
 mod repository;
 mod shell;
 mod util;
+mod ver_funcs;
 
 pub use category::Category;
 pub use ebuild::Ebuild;

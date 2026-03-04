@@ -10,7 +10,9 @@ use crate::builtins;
 use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
 use crate::inherit;
+use crate::pms_builtins;
 use crate::repository::Repository;
+use crate::ver_funcs;
 
 /// Metadata variables extracted from a sourced ebuild.
 ///
@@ -108,6 +110,39 @@ impl EbuildShell {
         shell.register_builtin(
             "inherit",
             brush_core::builtins::builtin::<inherit::InheritCommand, _>(),
+        );
+
+        // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
+        for (name, builtin) in [
+            ("has",        brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
+            ("hasv",       brush_core::builtins::builtin::<pms_builtins::HasvCommand, _>()),
+            ("hasq",       brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
+            ("use",        brush_core::builtins::builtin::<pms_builtins::UseCommand, _>()),
+            ("usev",       brush_core::builtins::builtin::<pms_builtins::UsevCommand, _>()),
+            ("usex",       brush_core::builtins::builtin::<pms_builtins::UsexCommand, _>()),
+            ("use_enable", brush_core::builtins::builtin::<pms_builtins::UseEnableCommand, _>()),
+            ("use_with",   brush_core::builtins::builtin::<pms_builtins::UseWithCommand, _>()),
+            ("in_iuse",    brush_core::builtins::builtin::<pms_builtins::InIuseCommand, _>()),
+        ] {
+            shell.register_builtin(name, builtin);
+        }
+
+        // Register PMS 12.3.14 version manipulation builtins.
+        // ver_cut and ver_test are Rust builtins to avoid bash arithmetic
+        // issues in array slice expressions (brush limitation).
+        // ver_rs is kept as a bash function because brush silently drops
+        // empty-string args when calling Rust builtins.
+        shell.register_builtin(
+            "ver_cut",
+            brush_core::builtins::builtin::<ver_funcs::VerCutCommand, _>(),
+        );
+        shell.register_builtin(
+            "ver_rs",
+            brush_core::builtins::builtin::<ver_funcs::VerRsCommand, _>(),
+        );
+        shell.register_builtin(
+            "ver_test",
+            brush_core::builtins::builtin::<ver_funcs::VerTestCommand, _>(),
         );
 
         let mut ebuild_shell = EbuildShell {
