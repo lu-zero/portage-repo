@@ -48,19 +48,8 @@ die() {
 # nonfatal: run command, ignore failure
 nonfatal() { "$@"; return 0; }
 
-# EXPORT_FUNCTIONS: create phase aliases for the current eclass
-#
-# See PMS 10 — EXPORT_FUNCTIONS.
-EXPORT_FUNCTIONS() {
-    if [[ -z "${ECLASS}" ]]; then
-        die "EXPORT_FUNCTIONS called outside eclass scope"
-        return 1
-    fi
-    local __phase
-    for __phase in "$@"; do
-        eval "${__phase}() { ${ECLASS}_${__phase} \"\$@\"; }"
-    done
-}
+
+# EXPORT_FUNCTIONS — implemented as a Rust builtin (pms_builtins.rs)
 
 # ── Tier 2: called at eclass source time ─────────────────────────────
 

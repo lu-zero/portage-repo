@@ -114,6 +114,7 @@ impl EbuildShell {
 
         // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
         for (name, builtin) in [
+            ("EXPORT_FUNCTIONS", brush_core::builtins::builtin::<pms_builtins::ExportFunctionsCommand, _>()),
             ("has",        brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
             ("hasv",       brush_core::builtins::builtin::<pms_builtins::HasvCommand, _>()),
             ("hasq",       brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
