@@ -1,0 +1,26 @@
+# Benchmark — bash builtins ported to Rust
+# Date: 2026-03-04
+# Machine: macOS Darwin 23.6.0, 12 logical CPUs
+# Build: cargo run --release
+# Corpus: gentoo/ repo (32,138 ebuilds total, 763 missing cache)
+# Mismatches: 0
+# Command: /usr/bin/time -l cargo run --release --example regen_cache gentoo 'dev-libs/*'
+
+## dev-libs slice (1,236 ebuilds) — repeatable benchmark target
+
+Phase                     real    user    sys    maxrss
+─────────────────────────────────────────────────────────
+Baseline (all bash)       2.36s  12.12s  8.31s   86 MB
++has/use/in_iuse (Rust)   2.15s  11.26s  5.85s   82 MB
++EXPORT_FUNCTIONS (Rust)  2.18s  11.06s  5.90s   80 MB
++die (Rust)               2.10s  10.94s  6.04s   79 MB
+─────────────────────────────────────────────────────────
+Cumulative gain           -11%   -10%   -27%    -8%
+
+## Full run (32,138 ebuilds) — baseline only
+# Approx 2–3 minutes (parallel, 12 workers)
+Total:         32138
+Sourced OK:    32138
+Errors:        0
+Mismatches:    0
+Missing cache: 763
