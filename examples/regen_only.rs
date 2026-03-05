@@ -1,0 +1,175 @@
+//! Minimal metadata regeneration benchmark — no comparison, optional write.
+//!
+//! Sources every ebuild in the repo in parallel and optionally writes the
+//! resulting md5-cache files to a directory.  Intended as a like-for-like
+//! comparison with:
+//!
+//!   pk repo metadata regen -p <cache-dir> -n -f -j <N> <repo>
+//!
+//! Usage:
+//!   regen_only <repo-path> [-o <cache-dir>] [-j <N>]
+//!
+//! Examples:
+//!   regen_only gentoo
+//!   regen_only gentoo -o /tmp/portage-cache -j 12
+
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+
+use portage_metadata::CacheEntry;
+use portage_repo::{Ebuild, Repository};
+
+async fn process_ebuild(
+    repo: &Repository,
+    masters: &[Repository],
+    ebuild: &Ebuild,
+    out_dir: Option<&PathBuf>,
+) -> Result<(), String> {
+    let master_refs: Vec<&Repository> = masters.iter().collect();
+    let mut shell = repo
+        .shell_with_masters(&master_refs)
+        .await
+        .map_err(|e| format!("shell: {e}"))?;
+
+    let metadata = shell
+        .source_ebuild(ebuild)
+        .await
+        .map_err(|e| format!("source: {e}"))?;
+
+    if let Some(dir) = out_dir {
+        let entry = CacheEntry {
+            metadata,
+            md5: None,
+            eclasses: vec![],
+        };
+        let category = ebuild.category();
+        let cat_dir = dir.join(category);
+        fs::create_dir_all(&cat_dir).map_err(|e| format!("mkdir: {e}"))?;
+        let cpv_file = cat_dir.join(format!(
+            "{}-{}",
+            ebuild.name(),
+            ebuild.version()
+        ));
+        fs::write(&cpv_file, entry.serialize()).map_err(|e| format!("write: {e}"))?;
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = env::args().collect();
+    if args.len() < 2 {
+        eprintln!("Usage: {} <repo-path> [-o <cache-dir>] [-j <N>]", args[0]);
+        eprintln!();
+        eprintln!("Examples:");
+        eprintln!("  {} gentoo", args[0]);
+        eprintln!("  {} gentoo -o /tmp/portage-cache -j 12", args[0]);
+        process::exit(2);
+    }
+
+    let repo_path = &args[1];
+    let mut out_dir: Option<PathBuf> = None;
+    let mut jobs: usize = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    let mut i = 2;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--output" => {
+                i += 1;
+                if i < args.len() {
+                    out_dir = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "-j" | "--jobs" => {
+                i += 1;
+                if i < args.len() {
+                    jobs = args[i].parse().unwrap_or(jobs);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let repo = match Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Error opening repo: {e}");
+            process::exit(1);
+        }
+    };
+
+    let ebuilds = match repo.ebuilds() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error listing ebuilds: {e}");
+            process::exit(1);
+        }
+    };
+
+    let total = ebuilds.len();
+    eprintln!(
+        "Sourcing {total} ebuilds with {jobs} workers{}...",
+        out_dir
+            .as_ref()
+            .map(|p| format!(", writing to {}", p.display()))
+            .unwrap_or_default()
+    );
+
+    let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
+    let repo = Arc::new(repo);
+    let out_dir = Arc::new(out_dir);
+    let errors = Arc::new(AtomicUsize::new(0));
+
+    let mut handles = Vec::new();
+    for _ in 0..jobs {
+        let rx = rx.clone();
+        let repo = Arc::clone(&repo);
+        let out_dir = Arc::clone(&out_dir);
+        let errors = Arc::clone(&errors);
+        handles.push(tokio::spawn(async move {
+            let masters: Vec<portage_repo::Repository> = vec![];
+            while let Ok(ebuild) = rx.recv_async().await {
+                if let Err(e) = process_ebuild(
+                    &repo,
+                    &masters,
+                    &ebuild,
+                    out_dir.as_ref().as_ref(),
+                )
+                .await
+                {
+                    let cpv = ebuild.cpv();
+                    eprintln!("ERROR {cpv}: {e}");
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }));
+    }
+    drop(rx);
+
+    for ebuild in ebuilds {
+        if tx.send(ebuild).is_err() {
+            break;
+        }
+    }
+    drop(tx);
+
+    for h in handles {
+        h.await.unwrap();
+    }
+
+    let err_count = errors.load(Ordering::Relaxed);
+    println!("Total: {total}  Errors: {err_count}");
+
+    if err_count > 0 {
+        process::exit(1);
+    }
+}
