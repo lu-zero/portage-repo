@@ -582,3 +582,175 @@ async fn llvm_set_globals_pattern() {
         "llvm_set_globals pattern must produce correct IUSE with all slots"
     );
 }
+
+// ─── 11. declare -n namerefs ────────────────────────────────────────
+//
+// Pattern:  declare -n ref=target; ... $ref ...; ref="value"
+// Used by:  nginx.eclass (_ngx_set_mod_depend)
+// Impact:   BDEPEND/DEPEND/RDEPEND for www-servers/nginx packages
+
+/// Reading through a nameref must expand to the target variable's value.
+#[tokio::test]
+async fn nameref_scalar_read() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        TARGET="hello_world"
+        declare -n REF=TARGET
+        __OUT="${REF}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "hello_world", "reading a nameref should return the target's value");
+}
+
+/// Writing to a nameref must update the target variable, not the nameref itself.
+#[tokio::test]
+async fn nameref_scalar_write() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        TARGET="original"
+        declare -n REF=TARGET
+        REF="modified"
+        __OUT="${TARGET}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "modified", "writing to a nameref must update the target variable");
+}
+
+/// `declare -n var` with no `=` makes var a nameref pointing to its current value
+/// (the name it currently holds becomes the target name).
+/// Used by nginx.eclass: `for dep_type in DEPEND RDEPEND; do declare -n dep_type; done`
+#[tokio::test]
+async fn nameref_no_equals_self_redirect() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        ACTUAL="the_value"
+        dep_type="ACTUAL"
+        declare -n dep_type
+        __OUT="${dep_type}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "the_value",
+        "declare -n var (no =) should make var a nameref to its current value"
+    );
+}
+
+/// Appending via `+=` through a nameref must append to the target variable.
+#[tokio::test]
+async fn nameref_append_write() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        TARGET="hello"
+        declare -n REF=TARGET
+        REF+=" world"
+        __OUT="${TARGET}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "hello world", "appending via nameref must update the target");
+}
+
+/// Reading an element of an associative array through a nameref.
+#[tokio::test]
+async fn nameref_assoc_array_element_read() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        declare -A TABLE=([key1]="val1" [key2]="val2")
+        declare -n REF=TABLE
+        __OUT="${REF[key1]}"
+        "#,
+    )
+    .await;
+    assert_eq!(got, "val1", "nameref to assoc array must allow element reads via [key]");
+}
+
+/// Iterating keys of an associative array through a nameref with `${!ref[@]}`.
+#[tokio::test]
+async fn nameref_assoc_array_key_iteration() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        declare -A TABLE=([only_key]="only_val")
+        declare -n REF=TABLE
+        keys=( "${!REF[@]}" )
+        __OUT="${#keys[@]}:${keys[0]}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "1:only_key",
+        "nameref key iteration via nameref must return the target assoc array's keys"
+    );
+}
+
+/// `declare +n` must remove the nameref attribute so subsequent writes go to
+/// the nameref variable itself rather than its former target.
+#[tokio::test]
+async fn nameref_removed_by_declare_plus_n() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        TARGET="target_value"
+        declare -n REF=TARGET
+        declare +n REF
+        REF="direct_value"
+        __OUT="${TARGET}|${REF}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "target_value|direct_value",
+        "declare +n must remove nameref: subsequent write goes to REF, not TARGET"
+    );
+}
+
+/// Minimal reproduction of the nginx.eclass nameref accumulation pattern for BDEPEND:
+/// nameref to assoc array + nameref-to-self (via `declare -n var`) in a for loop
+/// at global scope.  This covers the case where brush fixed the BDEPEND mismatches.
+///
+/// Note: the function-scope variant has a bash 5.3 regression (`dep_type+=` on
+/// a function-local nameref emits "not a valid identifier") that affects bash itself
+/// on macOS; only the global-scope pattern is tested here.
+#[tokio::test]
+async fn nameref_nginx_dep_accumulation_global() {
+    let (_tmp, mut shell) = test_shell().await;
+    let got = eval_var(
+        &mut shell,
+        r#"
+        declare -A _NGX_MOD_BDEPEND=([http_perl]="dev-lang/perl")
+        BDEPEND=""
+
+        for dep_type in BDEPEND; do
+            declare -n dep_table="_NGX_MOD_${dep_type}"
+            declare -n dep_type
+            for mod in "${!dep_table[@]}"; do
+                dep_type+=" nginx_modules_${mod}? ( ${dep_table[${mod}]} )"
+            done
+            declare +n dep_table dep_type
+        done
+
+        __OUT="${BDEPEND}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got.trim(),
+        "nginx_modules_http_perl? ( dev-lang/perl )",
+        "nginx-style global nameref dep accumulation must write through nameref to BDEPEND"
+    );
+}

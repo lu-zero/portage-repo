@@ -131,6 +131,7 @@ ver_rs_test!(
     "\"\"",
     "1.2.3b_alpha4"
 );
+
 ver_rs_test!(
     ver_rs_multi_pair2,
     "a1b_2-c-3-d4e5",
