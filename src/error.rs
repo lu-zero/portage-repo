@@ -16,6 +16,10 @@ pub enum Error {
     #[error("invalid layout.conf: {0}")]
     InvalidLayout(String),
 
+    /// Invalid or unparsable `Manifest` file.
+    #[error("invalid Manifest: {0}")]
+    InvalidManifest(String),
+
     /// The path does not point to a valid ebuild repository.
     #[error("not a valid repository: {0}")]
     InvalidRepository(PathBuf),

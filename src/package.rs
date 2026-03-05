@@ -4,6 +4,7 @@ use portage_atom::{Cpn, Cpv};
 
 use crate::ebuild::Ebuild;
 use crate::error::Result;
+use crate::manifest::Manifest;
 use crate::util;
 
 /// A package directory within a category.
@@ -88,9 +89,21 @@ impl Package {
         }
     }
 
-    /// Whether a `Manifest` file exists.
+    /// Whether a `Manifest` file exists (cheap existence check).
     pub fn has_manifest(&self) -> bool {
         self.path.join("Manifest").is_file()
+    }
+
+    /// Parse the `Manifest` file for this package.
+    ///
+    /// Returns `Ok(None)` if no `Manifest` file exists.
+    pub fn manifest(&self) -> Result<Option<Manifest>> {
+        let path = self.path.join("Manifest");
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => Manifest::parse(&contents).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(util::io_err(&path, e)),
+        }
     }
 
     /// Whether a `metadata.xml` file exists.
