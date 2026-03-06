@@ -1,3 +1,7 @@
+use std::io::Read;
+use std::path::Path;
+
+use blake2::Digest; // re-exports digest::Digest; valid for sha2 types too
 use crate::error::{Error, Result};
 
 /// A single entry in a `Manifest` file (GLEP 74).
@@ -27,6 +31,99 @@ pub enum ManifestEntry {
     Ignore { path: String },
     /// `TIMESTAMP` — last-updated RFC 3339 timestamp.
     Timestamp { value: String },
+}
+
+impl ManifestEntry {
+    /// Verify that `path` matches this Manifest entry's recorded size and hashes.
+    ///
+    /// `Ignore` and `Timestamp` entries always return `Ok(())`.
+    /// For all other variants the file is read once and checked.
+    pub fn verify_file(&self, path: &Path) -> Result<()> {
+        match self {
+            ManifestEntry::Ignore { .. } | ManifestEntry::Timestamp { .. } => Ok(()),
+            ManifestEntry::Dist { size, hashes, .. }
+            | ManifestEntry::Data { size, hashes, .. }
+            | ManifestEntry::SubManifest { size, hashes, .. } => {
+                verify_hashes(path, *size, hashes)
+            }
+        }
+    }
+}
+
+/// Single-pass size + multi-hash verification.
+fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -> Result<()> {
+    // --- size check (cheap, no I/O beyond stat) ---
+    let actual_size = std::fs::metadata(path)
+        .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?
+        .len();
+    if actual_size != expected_size {
+        return Err(Error::ManifestVerifyFailed {
+            path: path.to_path_buf(),
+            reason: format!(
+                "size mismatch: expected {} bytes, got {}",
+                expected_size, actual_size
+            ),
+        });
+    }
+
+    // --- decide which hashers we need ---
+    let need_blake2b = hashes.iter().any(|(a, _)| a == "BLAKE2B");
+    let need_sha512  = hashes.iter().any(|(a, _)| a == "SHA512");
+    let need_sha256  = hashes.iter().any(|(a, _)| a == "SHA256");
+
+    if !need_blake2b && !need_sha512 && !need_sha256 {
+        // No recognised algorithm → nothing to verify.
+        return Ok(());
+    }
+
+    // --- single read pass ---
+    let mut blake2b_h: Option<blake2::Blake2b512> = need_blake2b.then(Digest::new);
+    let mut sha512_h:  Option<sha2::Sha512>        = need_sha512.then(Digest::new);
+    let mut sha256_h:  Option<sha2::Sha256>        = need_sha256.then(Digest::new);
+
+    let file = std::fs::File::open(path)
+        .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+        if n == 0 {
+            break;
+        }
+        let chunk = &buf[..n];
+        if let Some(h) = blake2b_h.as_mut() { h.update(chunk); }
+        if let Some(h) = sha512_h.as_mut()  { h.update(chunk); }
+        if let Some(h) = sha256_h.as_mut()  { h.update(chunk); }
+    }
+
+    // --- compare digests ---
+    let blake2b_hex = blake2b_h.map(|h| hex::encode(h.finalize()));
+    let sha512_hex  = sha512_h.map(|h|  hex::encode(h.finalize()));
+    let sha256_hex  = sha256_h.map(|h|  hex::encode(h.finalize()));
+
+    for (algo, expected_hex) in hashes {
+        let actual_opt = match algo.as_str() {
+            "BLAKE2B" => blake2b_hex.as_deref(),
+            "SHA512"  => sha512_hex.as_deref(),
+            "SHA256"  => sha256_hex.as_deref(),
+            _         => None, // unknown algo — skip
+        };
+        if let Some(actual) = actual_opt {
+            if actual != expected_hex.to_lowercase() {
+                return Err(Error::ManifestVerifyFailed {
+                    path: path.to_path_buf(),
+                    reason: format!(
+                        "{} mismatch: expected {}, got {}",
+                        algo, expected_hex, actual
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Parsed representation of a `Manifest` file (GLEP 74).
@@ -271,5 +368,87 @@ TIMESTAMP 2024-06-01T00:00:00Z
     fn parse_error_orphan_hash_algo() {
         let input = "DIST foo.tar.gz 42 SHA256\n";
         assert!(Manifest::parse(input).is_err());
+    }
+
+    // --- verify_file tests ---
+
+    /// Pre-computed hashes for the 5-byte content b"hello".
+    fn hello_hashes() -> Vec<(String, String)> {
+        use blake2::Digest as _; // covers sha2 types (same underlying trait)
+        let blake2b = hex::encode(blake2::Blake2b512::digest(b"hello"));
+        let sha512  = hex::encode(sha2::Sha512::digest(b"hello"));
+        vec![
+            ("BLAKE2B".to_string(), blake2b),
+            ("SHA512".to_string(),  sha512),
+        ]
+    }
+
+    #[test]
+    fn verify_correct_hashes() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello").unwrap();
+        let entry = ManifestEntry::Dist {
+            filename: "test".into(),
+            size: 5,
+            hashes: hello_hashes(),
+        };
+        assert!(entry.verify_file(f.path()).is_ok());
+    }
+
+    #[test]
+    fn verify_wrong_hash() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello").unwrap();
+        let mut hashes = hello_hashes();
+        hashes[0].1 = "deadbeef".to_string(); // corrupt BLAKE2B hex
+        let entry = ManifestEntry::Dist { filename: "test".into(), size: 5, hashes };
+        let err = entry.verify_file(f.path()).unwrap_err();
+        assert!(matches!(err, crate::error::Error::ManifestVerifyFailed { .. }));
+        assert!(err.to_string().contains("BLAKE2B mismatch"));
+    }
+
+    #[test]
+    fn verify_wrong_size() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello").unwrap();
+        let entry = ManifestEntry::Dist {
+            filename: "test".into(),
+            size: 999, // wrong
+            hashes: hello_hashes(),
+        };
+        let err = entry.verify_file(f.path()).unwrap_err();
+        assert!(matches!(err, crate::error::Error::ManifestVerifyFailed { .. }));
+        assert!(err.to_string().contains("size mismatch"));
+    }
+
+    #[test]
+    fn verify_unknown_algo_skipped() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut f, b"hello").unwrap();
+        let entry = ManifestEntry::Dist {
+            filename: "test".into(),
+            size: 5,
+            hashes: vec![("FUTURE_HASH".to_string(), "doesnotmatter".to_string())],
+        };
+        // Unknown algo → no hashers → Ok(())
+        assert!(entry.verify_file(f.path()).is_ok());
+    }
+
+    #[test]
+    fn verify_ignore_noop() {
+        let entry = ManifestEntry::Ignore { path: "some/path".into() };
+        // Path doesn't even need to exist.
+        assert!(entry.verify_file(std::path::Path::new("/nonexistent/path")).is_ok());
+    }
+
+    #[test]
+    fn verify_missing_file() {
+        let entry = ManifestEntry::Dist {
+            filename: "test".into(),
+            size: 5,
+            hashes: hello_hashes(),
+        };
+        let err = entry.verify_file(std::path::Path::new("/nonexistent/missing.tar.gz")).unwrap_err();
+        assert!(matches!(err, crate::error::Error::Io { .. }));
     }
 }
