@@ -453,7 +453,7 @@ impl Repository {
     /// matching Portage's USE flag precedence order.
     ///
     /// To also include master repository eclasses, create the shell with
-    /// [`shell_with_masters`] and then call [`ProfileStack::configure_shell`]
+    /// [`Repository::shell_with_masters`] and then call [`ProfileStack::configure_shell`]
     /// manually.
     ///
     /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).

@@ -24,6 +24,7 @@ flume = "0.12.0"
 blake2 = "0.10"
 sha2 = "0.10"
 hex = "0.4"
+roxmltree = "0.21.1"
 
 [dev-dependencies]
 libc = "0.2"

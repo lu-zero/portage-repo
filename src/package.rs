@@ -5,6 +5,7 @@ use portage_atom::{Cpn, Cpv};
 use crate::ebuild::Ebuild;
 use crate::error::Result;
 use crate::manifest::Manifest;
+use crate::pkgmetadata::PkgMetadata;
 use crate::util;
 
 /// A package directory within a category.
@@ -106,8 +107,22 @@ impl Package {
         }
     }
 
-    /// Whether a `metadata.xml` file exists.
+    /// Whether a `metadata.xml` file exists (cheap existence check).
     pub fn has_metadata_xml(&self) -> bool {
         self.path.join("metadata.xml").is_file()
+    }
+
+    /// Parse the `metadata.xml` file for this package.
+    ///
+    /// Returns `Ok(None)` if no `metadata.xml` file exists.
+    ///
+    /// See [PMS Appendix A](https://projects.gentoo.org/pms/9/pms.html#metadata-xml).
+    pub fn metadata_xml(&self) -> Result<Option<PkgMetadata>> {
+        let path = self.path.join("metadata.xml");
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => PkgMetadata::parse(&contents).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(util::io_err(&path, e)),
+        }
     }
 }

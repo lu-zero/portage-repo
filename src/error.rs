@@ -43,6 +43,10 @@ pub enum Error {
     /// Hash or size mismatch when verifying a file against a Manifest entry.
     #[error("manifest verify failed for {path}: {reason}")]
     ManifestVerifyFailed { path: PathBuf, reason: String },
+
+    /// Invalid or unparsable `metadata.xml` file.
+    #[error("invalid metadata.xml: {0}")]
+    InvalidMetadataXml(String),
 }
 
 impl From<portage_metadata::Error> for Error {
