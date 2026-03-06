@@ -13,6 +13,10 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 - Profile descriptions (`profiles.desc`), USE flag descriptions, arch list, mirrors
 - Eclass and license listing
 - Dotfiles skipped in category/package enumeration
+- `profiles/eapi` — default EAPI for profile dirs (`Repository::profiles_eapi`)
+- `profiles/package.mask` — repo-level package masks (`Repository::repo_package_mask`)
+- `profiles/desc/` — USE_EXPAND flag descriptions (`Repository::use_expand_names`,
+  `Repository::use_expand_desc`)
 
 #### Profiles (PMS 5)
 - `parent`, `eapi`, `packages`, `package.mask`, `package.use`
@@ -78,15 +82,6 @@ always `source`) since this codebase only does metadata extraction.
 Fields are read and stacked by `ProfileStack` but have no separate EAPI guard
 (they are silently absent on older profiles, which is correct behaviour).
 
-#### Top-level `profiles/eapi` (PMS 4.4)
-EAPI 9 allows a `profiles/eapi` file that sets the default EAPI for profiles.
-Not read.
-
-#### Repository-level `profiles/package.mask` (PMS 4.4)
-Not read (only profile-level `package.mask` is handled).
-
-#### `profiles/desc/` directory (PMS 4.4)
-USE_EXPAND variable descriptions not implemented.
 
 #### `profiles/updates/` directory (PMS 4.4.4)
 Package move/slotmove updates not implemented.

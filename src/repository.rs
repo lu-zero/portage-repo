@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use jwalk::WalkDir;
-use portage_atom::{Cpn, Cpv};
-use portage_metadata::CacheEntry;
+use portage_atom::{Cpn, Cpv, Dep};
+use portage_metadata::{CacheEntry, Eapi};
 
 use crate::category::Category;
 use crate::ebuild::Ebuild;
@@ -166,6 +166,79 @@ impl Repository {
             descs.push(ProfileDesc::parse(&line)?);
         }
         Ok(descs)
+    }
+
+    /// Read the default EAPI for profiles in this repository.
+    ///
+    /// Returns `None` if `profiles/eapi` is absent (EAPI 0 is implied).
+    ///
+    /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn profiles_eapi(&self) -> Result<Option<Eapi>> {
+        match util::read_single_line(&self.path.join("profiles").join("eapi"))? {
+            Some(s) => {
+                let eapi = s.parse::<Eapi>().map_err(|e| {
+                    Error::InvalidProfile(format!("bad EAPI in profiles/eapi: {e}"))
+                })?;
+                Ok(Some(eapi))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Parse the repository-level `profiles/package.mask`.
+    ///
+    /// These masks apply across all profiles in the repository and should
+    /// be merged before any profile-stack masks.  Returns an empty `Vec`
+    /// if the file is absent.
+    ///
+    /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn repo_package_mask(&self) -> Result<Vec<Dep>> {
+        let lines =
+            util::read_lines(&self.path.join("profiles").join("package.mask"))?;
+        lines.into_iter().map(|l| Dep::parse(&l).map_err(Into::into)).collect()
+    }
+
+    /// List available USE_EXPAND variable names from `profiles/desc/`.
+    ///
+    /// Returns the stem of each `.desc` file (e.g. `"cpu_flags_x86"`),
+    /// sorted alphabetically.
+    ///
+    /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn use_expand_names(&self) -> Result<Vec<String>> {
+        let dir = self.path.join("profiles").join("desc");
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(util::io_err(&dir, e)),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| util::io_err(&dir, e))?;
+            let fname = entry.file_name();
+            let fname = fname.to_string_lossy();
+            if let Some(stem) = fname.strip_suffix(".desc") {
+                if !stem.starts_with('.') {
+                    names.push(stem.to_string());
+                }
+            }
+        }
+        names.sort();
+        Ok(names)
+    }
+
+    /// Parse USE_EXPAND flag descriptions from `profiles/desc/{name}.desc`.
+    ///
+    /// Returns `(flag_name, description)` pairs.  Returns an empty `Vec`
+    /// if the file does not exist.
+    ///
+    /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn use_expand_desc(&self, name: &str) -> Result<Vec<(String, String)>> {
+        parse_desc_file(
+            &self.path
+                .join("profiles")
+                .join("desc")
+                .join(format!("{name}.desc")),
+        )
     }
 
     /// Open a profile directory relative to `profiles/`.
@@ -372,4 +445,87 @@ fn parse_desc_file(path: &Path) -> Result<Vec<(String, String)>> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create the minimal directory structure required by `Repository::open`.
+    fn make_test_repo(dir: &tempfile::TempDir) -> Repository {
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        Repository::open(dir.path()).unwrap()
+    }
+
+    #[test]
+    fn profiles_eapi_absent_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(repo.profiles_eapi().unwrap().is_none());
+    }
+
+    #[test]
+    fn profiles_eapi_returns_parsed_eapi() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::write(dir.path().join("profiles").join("eapi"), "5\n").unwrap();
+        assert_eq!(repo.profiles_eapi().unwrap(), Some(Eapi::Five));
+    }
+
+    #[test]
+    fn repo_package_mask_absent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(repo.repo_package_mask().unwrap().is_empty());
+    }
+
+    #[test]
+    fn repo_package_mask_parses_atoms() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::write(
+            dir.path().join("profiles").join("package.mask"),
+            "# comment\ndev-libs/foo\ndev-libs/bar\n",
+        )
+        .unwrap();
+        let masks = repo.repo_package_mask().unwrap();
+        assert_eq!(masks.len(), 2);
+    }
+
+    #[test]
+    fn use_expand_names_absent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(repo.use_expand_names().unwrap().is_empty());
+    }
+
+    #[test]
+    fn use_expand_names_and_desc() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let desc_dir = dir.path().join("profiles").join("desc");
+        std::fs::create_dir_all(&desc_dir).unwrap();
+        std::fs::write(
+            desc_dir.join("cpu_flags_x86.desc"),
+            "mmx - MMX instruction support\nsse2 - SSE2 support\n",
+        )
+        .unwrap();
+
+        let names = repo.use_expand_names().unwrap();
+        assert_eq!(names, vec!["cpu_flags_x86"]);
+
+        let descs = repo.use_expand_desc("cpu_flags_x86").unwrap();
+        assert_eq!(descs.len(), 2);
+        assert_eq!(descs[0], ("mmx".to_string(), "MMX instruction support".to_string()));
+        assert_eq!(descs[1], ("sse2".to_string(), "SSE2 support".to_string()));
+    }
+
+    #[test]
+    fn use_expand_desc_absent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(repo.use_expand_desc("nonexistent").unwrap().is_empty());
+    }
 }
