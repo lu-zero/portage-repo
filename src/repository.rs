@@ -447,20 +447,26 @@ impl Repository {
     /// `profile_rel_path` is relative to the repository's `profiles/` directory,
     /// e.g. `"default/linux/amd64/17.1"`.
     ///
-    /// Builds the full [`ProfileStack`] from that path and calls
-    /// [`ProfileStack::configure_shell`], which sources `make.defaults` files,
-    /// expands `USE_EXPAND` variables, and applies `use.force` / `use.mask`.
+    /// `make_conf` is an optional path to a `make.conf`-style shell script
+    /// (typically `/etc/portage/make.conf`). When provided it is sourced after
+    /// the profile `make.defaults` chain but before `use.force`/`use.mask`,
+    /// matching Portage's USE flag precedence order.
     ///
     /// To also include master repository eclasses, create the shell with
-    /// [`shell_with_masters`] and then call
-    /// [`ProfileStack::configure_shell`] manually.
+    /// [`shell_with_masters`] and then call [`ProfileStack::configure_shell`]
+    /// manually.
     ///
     /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).
-    pub async fn shell_with_profile(&self, profile_rel_path: &str) -> Result<EbuildShell> {
+    pub async fn shell_with_profile(
+        &self,
+        profile_rel_path: &str,
+        make_conf: Option<&std::path::Path>,
+    ) -> Result<EbuildShell> {
         let path = self.path.join("profiles").join(profile_rel_path);
         let stack = ProfileStack::build(path)?;
         let mut shell = EbuildShell::new(self).await?;
-        stack.configure_shell(&mut shell).await?;
+        let confs: Vec<&std::path::Path> = make_conf.into_iter().collect();
+        stack.configure_shell(&mut shell, &confs).await?;
         Ok(shell)
     }
 

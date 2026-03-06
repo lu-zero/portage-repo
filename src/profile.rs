@@ -359,65 +359,58 @@ impl ProfileStack {
 
     /// Configure a shell with this profile's effective USE flags.
     ///
-    /// Performs the full profile USE computation per PMS 5.2:
+    /// `extra_confs` is a list of additional shell scripts (e.g. `/etc/portage/make.conf`,
+    /// `/etc/portage/profile/make.defaults`) sourced **after** the profile
+    /// `make.defaults` chain but **before** `use.force`/`use.mask` are applied.
+    /// Pass an empty slice when no user configuration is needed.
     ///
-    /// 1. Sources each `make.defaults` in ancestor-to-leaf order (sets `$USE`,
-    ///    `$USE_EXPAND`, `$USE_EXPAND_UNPREFIXED`, and expand variables).
-    /// 2. Expands `USE_EXPAND_UNPREFIXED` values directly into USE (e.g.
+    /// The full computation order matches Portage's USE flag precedence:
+    ///
+    /// 1. Profile `make.defaults` (ancestor → leaf) — sets `$USE`, `$USE_EXPAND`,
+    ///    expand variables, etc.
+    /// 2. Each `extra_confs` script in order — user additions/removals to `$USE`
+    ///    and expand variables.
+    /// 3. `USE_EXPAND_UNPREFIXED` values expanded directly into USE (e.g.
     ///    `ARCH=amd64` → adds `"amd64"`).
-    /// 3. Expands `USE_EXPAND` values with the variable name as a lowercase
-    ///    prefix (e.g. `CPU_FLAGS_X86=sse2` → adds `"cpu_flags_x86_sse2"`).
-    /// 4. Applies the stack's `use.force` (unconditional add).
-    /// 5. Applies the stack's `use.mask` (unconditional remove).
+    /// 4. `USE_EXPAND` values expanded with lowercase prefix (e.g.
+    ///    `CPU_FLAGS_X86=sse2` → adds `"cpu_flags_x86_sse2"`).
+    /// 5. Profile `use.force` — unconditional add, overrides user conf.
+    /// 6. Profile `use.mask` — unconditional remove, overrides user conf.
     ///
     /// After this call, `use()`, `usev()`, `usex()` and friends will return
-    /// correct results for the selected profile.
+    /// correct results for the selected profile and user configuration.
     ///
     /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).
-    pub async fn configure_shell(&self, shell: &mut EbuildShell) -> Result<()> {
-        // Step 1: source make.defaults through the stack.
+    pub async fn configure_shell(
+        &self,
+        shell: &mut EbuildShell,
+        extra_confs: &[&std::path::Path],
+    ) -> Result<()> {
+        // Step 1: source make.defaults through the profile stack.
         self.make_defaults(shell).await?;
 
-        // Step 2: collect current $USE.
-        let use_str = shell.get_var("USE").unwrap_or_default();
-        let mut flags: Vec<String> = use_str.split_whitespace().map(str::to_string).collect();
-
-        // Step 3: USE_EXPAND_UNPREFIXED — values added without prefix (e.g. ARCH).
-        let unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
-        for var in unprefixed.split_whitespace() {
-            let val = shell.get_var(var).unwrap_or_default();
-            for v in val.split_whitespace() {
-                if !flags.iter().any(|f| f == v) {
-                    flags.push(v.to_string());
-                }
-            }
+        // Step 2: source extra user conf files (e.g. make.conf).
+        // These may modify $USE, $USE_EXPAND, and expand variables.
+        for conf in extra_confs {
+            shell.source_make_defaults(conf).await?;
         }
 
-        // Step 4: USE_EXPAND — values prefixed with lowercase variable name.
-        let use_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
-        for var in use_expand.split_whitespace() {
-            let val = shell.get_var(var).unwrap_or_default();
-            let prefix = var.to_lowercase();
-            for v in val.split_whitespace() {
-                let flag = format!("{prefix}_{v}");
-                if !flags.iter().any(|f| f == &flag) {
-                    flags.push(flag);
-                }
-            }
-        }
+        // Steps 3+4: expand USE_EXPAND vars into the USE flag list.
+        // Done after ALL conf sourcing so make.conf's expand var values count.
+        let mut flags = collect_use_flags(shell);
 
-        // Step 5: use.force — unconditionally add.
+        // Step 5: use.force — unconditionally add (overrides user conf).
         for flag in self.use_force()? {
             if !flags.iter().any(|f| f == &flag) {
                 flags.push(flag);
             }
         }
 
-        // Step 6: use.mask — unconditionally remove.
+        // Step 6: use.mask — unconditionally remove (overrides user conf).
         let mask: HashSet<String> = self.use_mask()?.into_iter().collect();
         flags.retain(|f| !mask.contains(f.as_str()));
 
-        // Step 7: apply to shell (updates both internal set and $USE env var).
+        // Apply to shell (updates both internal set and $USE env var).
         let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
         shell.set_use_flags(&flag_refs)
     }
@@ -426,6 +419,56 @@ impl ProfileStack {
 // ---------------------------------------------------------------------------
 // ProfileStack helpers (private)
 // ---------------------------------------------------------------------------
+
+/// Expand `$USE`, `USE_EXPAND_UNPREFIXED`, and `USE_EXPAND` from the shell
+/// into a deduplicated USE flag list.
+///
+/// `$USE` is an incremental list: tokens prefixed with `-` remove a flag that
+/// was added earlier (same semantics as `use.force`/`use.mask` files and
+/// Portage's own USE processing).  This handles `make.conf` lines such as
+/// `USE="${USE} user_flag -unwanted"`.
+///
+/// Called after all conf files have been sourced so that values set in
+/// `make.conf` (e.g. `VIDEO_CARDS="intel"`) are included in the expansion.
+fn collect_use_flags(shell: &EbuildShell) -> Vec<String> {
+    let use_str = shell.get_var("USE").unwrap_or_default();
+    let mut flags: Vec<String> = Vec::new();
+
+    // Process $USE incrementally: "-flag" removes a previously added flag.
+    for token in use_str.split_whitespace() {
+        if let Some(name) = token.strip_prefix('-') {
+            flags.retain(|f| f != name);
+        } else if !flags.iter().any(|f| f == token) {
+            flags.push(token.to_string());
+        }
+    }
+
+    // USE_EXPAND_UNPREFIXED: values added to USE directly (e.g. ARCH=amd64 → "amd64").
+    let unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
+    for var in unprefixed.split_whitespace() {
+        let val = shell.get_var(var).unwrap_or_default();
+        for v in val.split_whitespace() {
+            if !flags.iter().any(|f| f == v) {
+                flags.push(v.to_string());
+            }
+        }
+    }
+
+    // USE_EXPAND: values prefixed with the lowercase variable name.
+    let use_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
+    for var in use_expand.split_whitespace() {
+        let val = shell.get_var(var).unwrap_or_default();
+        let prefix = var.to_lowercase();
+        for v in val.split_whitespace() {
+            let flag = format!("{prefix}_{v}");
+            if !flags.iter().any(|f| f == &flag) {
+                flags.push(flag);
+            }
+        }
+    }
+
+    flags
+}
 
 /// Recursively collect profiles depth-first, ancestors before self.
 ///
@@ -753,7 +796,7 @@ mod tests {
 
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
-        stack.configure_shell(&mut shell).await.unwrap();
+        stack.configure_shell(&mut shell, &[]).await.unwrap();
 
         let use_val = shell.get_var("USE").unwrap_or_default();
         let flags: HashSet<&str> = use_val.split_whitespace().collect();
@@ -772,7 +815,7 @@ mod tests {
 
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
-        stack.configure_shell(&mut shell).await.unwrap();
+        stack.configure_shell(&mut shell, &[]).await.unwrap();
 
         let use_val = shell.get_var("USE").unwrap_or_default();
         let flags: HashSet<&str> = use_val.split_whitespace().collect();
@@ -797,7 +840,7 @@ mod tests {
 
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
-        stack.configure_shell(&mut shell).await.unwrap();
+        stack.configure_shell(&mut shell, &[]).await.unwrap();
 
         let use_val = shell.get_var("USE").unwrap_or_default();
         let flags: HashSet<&str> = use_val.split_whitespace().collect();
@@ -818,11 +861,47 @@ mod tests {
 
         let stack = ProfileStack::build(profile).unwrap();
         let mut shell = repo.shell().await.unwrap();
-        stack.configure_shell(&mut shell).await.unwrap();
+        stack.configure_shell(&mut shell, &[]).await.unwrap();
 
         let use_val = shell.get_var("USE").unwrap_or_default();
         let flags: HashSet<&str> = use_val.split_whitespace().collect();
         assert!(flags.contains("amd64"), "ARCH added unprefixed");
+    }
+
+    #[tokio::test]
+    async fn configure_shell_make_conf_applied_before_force_mask() {
+        // make.conf adds "user_flag", removes profile "bar".
+        // use.force re-adds "forced" regardless.
+        // use.mask removes "bar" regardless — but make.conf already removed it,
+        // proving the ordering doesn't break anything.
+        // Critically: use.force must override make.conf's removal of "forced".
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(profile.join("make.defaults"), "USE=\"foo bar forced\"\n").unwrap();
+        std::fs::write(profile.join("use.force"), "forced\n").unwrap();
+        std::fs::write(profile.join("use.mask"), "bar\n").unwrap();
+
+        // make.conf: user tries to remove "forced" and adds "user_flag"
+        let make_conf = dir.path().join("make.conf");
+        std::fs::write(&make_conf, "USE=\"${USE} user_flag -forced\"\n").unwrap();
+
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        stack
+            .configure_shell(&mut shell, &[make_conf.as_path()])
+            .await
+            .unwrap();
+
+        let use_val = shell.get_var("USE").unwrap_or_default();
+        let flags: HashSet<&str> = use_val.split_whitespace().collect();
+        assert!(flags.contains("foo"), "foo from make.defaults");
+        assert!(flags.contains("user_flag"), "user_flag from make.conf");
+        assert!(!flags.contains("bar"), "bar masked by use.mask");
+        assert!(
+            flags.contains("forced"),
+            "forced re-added by use.force (overrides make.conf -forced)"
+        );
     }
 
     #[test]
