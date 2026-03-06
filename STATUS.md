@@ -70,77 +70,26 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 
 ---
 
-### Missing features
+### Known limitations
 
-#### PM-provided variables (PMS 11.1)
-All global-scope PM-provided variables are now set.  Phase-specific accuracy
-is still approximate (e.g. `EBUILD_PHASE` is always `depend`, `MERGE_TYPE` is
-always `source`) since this codebase only does metadata extraction.
+#### USE flag stubs always return false (by design)
+`use()`, `usev()`, `usex()` always return 1 (false). Correct for metadata
+extraction (no profile is active), but ebuilds that conditionally set metadata
+variables based on USE flags at source time will produce different values than
+a real `pmaint regen` with an active profile.
 
+#### Phase-specific PM variables are approximate (by design)
+`EBUILD_PHASE` is always `depend`, `MERGE_TYPE` is always `source`. Correct
+for metadata extraction; would need richer context for phase execution.
 
-#### `use.stable` / `package.use.stable` (PMS 5.2.11)
-Fields are read and stacked by `ProfileStack` but have no separate EAPI guard
-(they are silently absent on older profiles, which is correct behaviour).
-
-
-#### `profiles/updates/` directory (PMS 4.4.4)
-Implemented: `Repository::profile_updates()` returns `Vec<ProfileUpdate>` with
-`Move { old: Cpn, new: Cpn }` and `SlotMove { dep: Dep, old_slot, new_slot }` variants.
-Unknown tags are silently skipped for forward-compatibility.
+#### `BASH_COMPAT` per EAPI (PMS 6, Table 6.1)
+`BASH_COMPAT` is not set per EAPI. PMS requires bash 3.2 for EAPIs 0–5,
+4.2 for EAPIs 6–7, 5.0 for EAPI 8, 5.3 for EAPI 9. Brush does not expose
+this setting in a meaningful way; no mismatches observed in practice.
 
 #### Legacy metadata cache format (PMS 14.2)
 Only md5-dict (`metadata/md5-cache/`) is supported. The positional line-based
-`metadata/cache/` format is not implemented.
-
-#### `ver_replacing` command (PMS 12.3.14, EAPI 9)
-Implemented as a no-op stub (returns exit 0 with no output). During metadata
-extraction no package is being replaced, so this is always correct.
-
-#### Bash compatibility per EAPI (PMS 6, Table 6.1)
-`BASH_COMPAT` is not set per EAPI. PMS requires bash 3.2 for EAPIs 0–5,
-4.2 for EAPIs 6–7, 5.0 for EAPI 8, 5.3 for EAPI 9.
-
-#### `failglob` in global scope (PMS 6)
-Implemented: `source_ebuild` sets `shopt -s failglob` for EAPI >= 6 and
-`shopt -u failglob` otherwise. The option is reset on each ebuild sourcing call.
-
----
-
-### Upstream dependencies
-
-#### portage-metadata / portage-atom parsing gaps
-The metadata and dependency parsers reject several valid PMS constructs,
-causing ~2.5% of ebuilds to fail during `CacheEntry::parse()`. See
-`../portage-metadata/ISSUES.md` for details.
-
-#### brush-core parser bugs
-Some ebuilds fail to parse due to remaining brush-core/winnow bugs.
-See `../brush/ISSUES.md` for details. Remaining open issues:
-- `<<-` tab stripping inside command substitutions
-- Complex parameter expansion edge cases
-- Arithmetic expansion edge cases
-
----
-
-### Serialization ordering differences
-`CacheEntry::serialize()` in portage-metadata may produce fields in a different
-order or with different whitespace than the reference cache from `pmaint regen`.
-The regen_cache comparison uses key-by-key diffing, but within-value ordering
-(e.g. USE flags, keywords) may still cause false-positive diffs.
-
-`DEFINED_PHASES` is now sorted alphabetically to match Portage's cache format.
-`INHERITED` is excluded from comparison since the md5-cache uses `_eclasses_`
-with checksums instead.
-
-### USE flag stubs always return false
-`use()`, `usev()`, `usex()` always return 1 (false). Correct for metadata
-extraction (no profile active), but ebuilds that conditionally set metadata
-variables based on USE flags at source time will produce different values.
-
-### Missing `tc-*` and other toolchain-funcs
-Eclasses like `toolchain-funcs.eclass` define functions (`tc-getCC`,
-`tc-is-gcc`, etc.) that some ebuilds call at source time. These are handled by
-sourcing the eclass, but any that shell out to real compilers will fail.
+`metadata/cache/` format is not implemented. No modern repository uses it.
 
 ## Running the full comparison
 
