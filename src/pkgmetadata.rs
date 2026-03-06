@@ -33,8 +33,7 @@ impl PkgMetadata {
         for use_node in root.children().filter(|n| n.has_tag_name("use")) {
             for flag_node in use_node.children().filter(|n| n.has_tag_name("flag")) {
                 if let Some(name) = flag_node.attribute("name") {
-                    let desc = collect_text(flag_node);
-                    use_flags.insert(name.to_string(), desc.trim().to_string());
+                    use_flags.insert(name.to_string(), collect_text(flag_node));
                 }
             }
         }
@@ -44,6 +43,9 @@ impl PkgMetadata {
 }
 
 /// Recursively collect all text content from an XML node, stripping element tags.
+///
+/// Runs of whitespace (spaces, tabs, newlines) are collapsed to a single space
+/// so that multi-line `<flag>` descriptions come out as a clean single line.
 fn collect_text(node: roxmltree::Node<'_, '_>) -> String {
     let mut buf = String::new();
     for child in node.children() {
@@ -55,7 +57,15 @@ fn collect_text(node: roxmltree::Node<'_, '_>) -> String {
             buf.push_str(&collect_text(child));
         }
     }
-    buf
+    // Collapse all whitespace runs (including newlines) to a single space.
+    let mut out = String::new();
+    for word in buf.split_whitespace() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    out
 }
 
 #[cfg(test)]
