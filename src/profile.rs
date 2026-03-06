@@ -356,6 +356,71 @@ impl ProfileStack {
         }
         Ok(())
     }
+
+    /// Configure a shell with this profile's effective USE flags.
+    ///
+    /// Performs the full profile USE computation per PMS 5.2:
+    ///
+    /// 1. Sources each `make.defaults` in ancestor-to-leaf order (sets `$USE`,
+    ///    `$USE_EXPAND`, `$USE_EXPAND_UNPREFIXED`, and expand variables).
+    /// 2. Expands `USE_EXPAND_UNPREFIXED` values directly into USE (e.g.
+    ///    `ARCH=amd64` → adds `"amd64"`).
+    /// 3. Expands `USE_EXPAND` values with the variable name as a lowercase
+    ///    prefix (e.g. `CPU_FLAGS_X86=sse2` → adds `"cpu_flags_x86_sse2"`).
+    /// 4. Applies the stack's `use.force` (unconditional add).
+    /// 5. Applies the stack's `use.mask` (unconditional remove).
+    ///
+    /// After this call, `use()`, `usev()`, `usex()` and friends will return
+    /// correct results for the selected profile.
+    ///
+    /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).
+    pub async fn configure_shell(&self, shell: &mut EbuildShell) -> Result<()> {
+        // Step 1: source make.defaults through the stack.
+        self.make_defaults(shell).await?;
+
+        // Step 2: collect current $USE.
+        let use_str = shell.get_var("USE").unwrap_or_default();
+        let mut flags: Vec<String> = use_str.split_whitespace().map(str::to_string).collect();
+
+        // Step 3: USE_EXPAND_UNPREFIXED — values added without prefix (e.g. ARCH).
+        let unprefixed = shell.get_var("USE_EXPAND_UNPREFIXED").unwrap_or_default();
+        for var in unprefixed.split_whitespace() {
+            let val = shell.get_var(var).unwrap_or_default();
+            for v in val.split_whitespace() {
+                if !flags.iter().any(|f| f == v) {
+                    flags.push(v.to_string());
+                }
+            }
+        }
+
+        // Step 4: USE_EXPAND — values prefixed with lowercase variable name.
+        let use_expand = shell.get_var("USE_EXPAND").unwrap_or_default();
+        for var in use_expand.split_whitespace() {
+            let val = shell.get_var(var).unwrap_or_default();
+            let prefix = var.to_lowercase();
+            for v in val.split_whitespace() {
+                let flag = format!("{prefix}_{v}");
+                if !flags.iter().any(|f| f == &flag) {
+                    flags.push(flag);
+                }
+            }
+        }
+
+        // Step 5: use.force — unconditionally add.
+        for flag in self.use_force()? {
+            if !flags.iter().any(|f| f == &flag) {
+                flags.push(flag);
+            }
+        }
+
+        // Step 6: use.mask — unconditionally remove.
+        let mask: HashSet<String> = self.use_mask()?.into_iter().collect();
+        flags.retain(|f| !mask.contains(f.as_str()));
+
+        // Step 7: apply to shell (updates both internal set and $USE env var).
+        let flag_refs: Vec<&str> = flags.iter().map(String::as_str).collect();
+        shell.set_use_flags(&flag_refs)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +731,98 @@ mod tests {
         let pkgs = stack.packages().unwrap();
         assert_eq!(pkgs.len(), 2);
         assert!(pkgs.iter().all(|(is_sys, _)| *is_sys));
+    }
+
+    // --- configure_shell tests (async, require a real EbuildShell) ---
+
+    use crate::repository::Repository;
+
+    fn make_test_repo(dir: &TempDir) -> Repository {
+        std::fs::create_dir_all(dir.path().join("metadata")).unwrap();
+        std::fs::write(dir.path().join("metadata").join("layout.conf"), "").unwrap();
+        std::fs::create_dir_all(dir.path().join("profiles")).unwrap();
+        Repository::open(dir.path()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn configure_shell_applies_make_defaults_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(profile.join("make.defaults"), "USE=\"foo bar\"\n").unwrap();
+
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        stack.configure_shell(&mut shell).await.unwrap();
+
+        let use_val = shell.get_var("USE").unwrap_or_default();
+        let flags: HashSet<&str> = use_val.split_whitespace().collect();
+        assert!(flags.contains("foo"), "foo from make.defaults");
+        assert!(flags.contains("bar"), "bar from make.defaults");
+    }
+
+    #[tokio::test]
+    async fn configure_shell_applies_use_force_and_mask() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(profile.join("make.defaults"), "USE=\"foo bar\"\n").unwrap();
+        std::fs::write(profile.join("use.force"), "forced\n").unwrap();
+        std::fs::write(profile.join("use.mask"), "bar\n").unwrap();
+
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        stack.configure_shell(&mut shell).await.unwrap();
+
+        let use_val = shell.get_var("USE").unwrap_or_default();
+        let flags: HashSet<&str> = use_val.split_whitespace().collect();
+        assert!(flags.contains("foo"), "foo from make.defaults");
+        assert!(!flags.contains("bar"), "bar should be masked");
+        assert!(
+            flags.contains("forced"),
+            "forced should be added by use.force"
+        );
+    }
+
+    #[tokio::test]
+    async fn configure_shell_expands_use_expand() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(
+            profile.join("make.defaults"),
+            "USE_EXPAND=\"CPU_FLAGS_X86\"\nCPU_FLAGS_X86=\"sse2 mmx\"\n",
+        )
+        .unwrap();
+
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        stack.configure_shell(&mut shell).await.unwrap();
+
+        let use_val = shell.get_var("USE").unwrap_or_default();
+        let flags: HashSet<&str> = use_val.split_whitespace().collect();
+        assert!(flags.contains("cpu_flags_x86_sse2"), "sse2 expanded");
+        assert!(flags.contains("cpu_flags_x86_mmx"), "mmx expanded");
+    }
+
+    #[tokio::test]
+    async fn configure_shell_expands_use_expand_unprefixed() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let profile = make_profile(&dir, "test", &[]);
+        std::fs::write(
+            profile.join("make.defaults"),
+            "USE_EXPAND_UNPREFIXED=\"ARCH\"\nARCH=\"amd64\"\n",
+        )
+        .unwrap();
+
+        let stack = ProfileStack::build(profile).unwrap();
+        let mut shell = repo.shell().await.unwrap();
+        stack.configure_shell(&mut shell).await.unwrap();
+
+        let use_val = shell.get_var("USE").unwrap_or_default();
+        let flags: HashSet<&str> = use_val.split_whitespace().collect();
+        assert!(flags.contains("amd64"), "ARCH added unprefixed");
     }
 
     #[test]
