@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use itertools::Itertools as _;
+
 use crate::error::{Error, Result};
 
 /// Package-level metadata from `metadata.xml`.
@@ -58,14 +60,7 @@ fn collect_text(node: roxmltree::Node<'_, '_>) -> String {
         }
     }
     // Collapse all whitespace runs (including newlines) to a single space.
-    let mut out = String::new();
-    for word in buf.split_whitespace() {
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        out.push_str(word);
-    }
-    out
+    buf.split_whitespace().join(" ")
 }
 
 #[cfg(test)]
