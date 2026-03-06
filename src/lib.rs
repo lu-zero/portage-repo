@@ -54,6 +54,6 @@ pub use error::{Error, Result};
 pub use layout::LayoutConf;
 pub use manifest::{Manifest, ManifestEntry};
 pub use package::Package;
-pub use profile::{Profile, ProfileDesc, ProfileStatus};
+pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
 pub use repository::Repository;
 pub use shell::EbuildShell;

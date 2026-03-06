@@ -20,6 +20,11 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 - `package.use.force`, `package.use.mask`, `package.use.stable.force`,
   `package.use.stable.mask`
 - `make.defaults` sourced through embedded bash shell
+- Profile inheritance / stacking (`ProfileStack`): depth-first parent
+  traversal with cycle/diamond-dedup, incremental `-` removal for `use.*`
+  and `package.mask`, directory-as-file support (PMS 5.1, 5.2.5)
+- `deprecated` file check (`ProfileStack::is_deprecated`)
+- `Repository::profile_stack()` convenience constructor
 
 #### Master repository eclass resolution (PMS 4.7, 10.1)
 - `Repository::open_with_masters()` — opens a repo and recursively resolves
@@ -68,19 +73,10 @@ All global-scope PM-provided variables are now set.  Phase-specific accuracy
 is still approximate (e.g. `EBUILD_PHASE` is always `depend`, `MERGE_TYPE` is
 always `source`) since this codebase only does metadata extraction.
 
-#### Profile inheritance / stacking (PMS 5.1, 5.2.5)
-`Profile` reads files in isolation — no parent merging, no `-` prefix removal
-for incremental files.
-
-#### Directory-as-file profile support (PMS 5.2.5)
-For EAPI 7+ with `profile-file-dirs`, `package.mask`, `package.use`, `use.*`,
-and `package.use.*` can be directories containing multiple files. Not handled.
-
-#### `deprecated` profile file (PMS 5.2.3)
-No method to check or read the `deprecated` file.
 
 #### `use.stable` / `package.use.stable` (PMS 5.2.11)
-These EAPI 9 profile files are not implemented.
+Fields are read and stacked by `ProfileStack` but have no separate EAPI guard
+(they are silently absent on older profiles, which is correct behaviour).
 
 #### Top-level `profiles/eapi` (PMS 4.4)
 EAPI 9 allows a `profiles/eapi` file that sets the default EAPI for profiles.

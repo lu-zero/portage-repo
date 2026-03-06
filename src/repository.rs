@@ -9,7 +9,7 @@ use crate::category::Category;
 use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
 use crate::layout::LayoutConf;
-use crate::profile::{Profile, ProfileDesc};
+use crate::profile::{Profile, ProfileDesc, ProfileStack};
 use crate::shell::EbuildShell;
 use crate::util;
 
@@ -172,6 +172,17 @@ impl Repository {
     pub fn profile(&self, relative_path: &str) -> Result<Profile> {
         let profile_path = self.path.join("profiles").join(relative_path);
         Profile::open(profile_path)
+    }
+
+    /// Build the full profile stack for a profile relative to `profiles/`.
+    ///
+    /// Follows `parent` files recursively and returns a [`ProfileStack`] with
+    /// all ancestor profiles in resolution order.
+    ///
+    /// See [PMS 5.1](https://projects.gentoo.org/pms/9/pms.html#profiles).
+    pub fn profile_stack(&self, relative_path: &str) -> Result<ProfileStack> {
+        let profile_path = self.path.join("profiles").join(relative_path);
+        ProfileStack::build(profile_path)
     }
 
     /// List available eclass names (without the `.eclass` extension).
