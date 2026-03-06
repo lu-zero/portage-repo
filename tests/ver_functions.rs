@@ -13,7 +13,10 @@ use tempfile::TempDir;
 fn raise_fd_limit() {
     #[cfg(unix)]
     unsafe {
-        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) == 0 {
             rlim.rlim_cur = rlim.rlim_max;
             libc::setrlimit(libc::RLIMIT_NOFILE, &rlim);

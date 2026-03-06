@@ -1,8 +1,8 @@
 use std::io::Read;
 use std::path::Path;
 
-use blake2::Digest; // re-exports digest::Digest; valid for sha2 types too
 use crate::error::{Error, Result};
+use blake2::Digest; // re-exports digest::Digest; valid for sha2 types too
 
 /// A single entry in a `Manifest` file (GLEP 74).
 ///
@@ -43,9 +43,7 @@ impl ManifestEntry {
             ManifestEntry::Ignore { .. } | ManifestEntry::Timestamp { .. } => Ok(()),
             ManifestEntry::Dist { size, hashes, .. }
             | ManifestEntry::Data { size, hashes, .. }
-            | ManifestEntry::SubManifest { size, hashes, .. } => {
-                verify_hashes(path, *size, hashes)
-            }
+            | ManifestEntry::SubManifest { size, hashes, .. } => verify_hashes(path, *size, hashes),
         }
     }
 }
@@ -54,7 +52,10 @@ impl ManifestEntry {
 fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -> Result<()> {
     // --- size check (cheap, no I/O beyond stat) ---
     let actual_size = std::fs::metadata(path)
-        .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?
+        .map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?
         .len();
     if actual_size != expected_size {
         return Err(Error::ManifestVerifyFailed {
@@ -68,8 +69,8 @@ fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -
 
     // --- decide which hashers we need ---
     let need_blake2b = hashes.iter().any(|(a, _)| a == "BLAKE2B");
-    let need_sha512  = hashes.iter().any(|(a, _)| a == "SHA512");
-    let need_sha256  = hashes.iter().any(|(a, _)| a == "SHA256");
+    let need_sha512 = hashes.iter().any(|(a, _)| a == "SHA512");
+    let need_sha256 = hashes.iter().any(|(a, _)| a == "SHA256");
 
     if !need_blake2b && !need_sha512 && !need_sha256 {
         // No recognised algorithm → nothing to verify.
@@ -78,48 +79,57 @@ fn verify_hashes(path: &Path, expected_size: u64, hashes: &[(String, String)]) -
 
     // --- single read pass ---
     let mut blake2b_h: Option<blake2::Blake2b512> = need_blake2b.then(Digest::new);
-    let mut sha512_h:  Option<sha2::Sha512>        = need_sha512.then(Digest::new);
-    let mut sha256_h:  Option<sha2::Sha256>        = need_sha256.then(Digest::new);
+    let mut sha512_h: Option<sha2::Sha512> = need_sha512.then(Digest::new);
+    let mut sha256_h: Option<sha2::Sha256> = need_sha256.then(Digest::new);
 
-    let file = std::fs::File::open(path)
-        .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+    let file = std::fs::File::open(path).map_err(|e| Error::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
     let mut reader = std::io::BufReader::new(file);
     let mut buf = vec![0u8; 65536];
     loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?;
+        let n = reader.read(&mut buf).map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         if n == 0 {
             break;
         }
         let chunk = &buf[..n];
-        if let Some(h) = blake2b_h.as_mut() { h.update(chunk); }
-        if let Some(h) = sha512_h.as_mut()  { h.update(chunk); }
-        if let Some(h) = sha256_h.as_mut()  { h.update(chunk); }
+        if let Some(h) = blake2b_h.as_mut() {
+            h.update(chunk);
+        }
+        if let Some(h) = sha512_h.as_mut() {
+            h.update(chunk);
+        }
+        if let Some(h) = sha256_h.as_mut() {
+            h.update(chunk);
+        }
     }
 
     // --- compare digests ---
     let blake2b_hex = blake2b_h.map(|h| hex::encode(h.finalize()));
-    let sha512_hex  = sha512_h.map(|h|  hex::encode(h.finalize()));
-    let sha256_hex  = sha256_h.map(|h|  hex::encode(h.finalize()));
+    let sha512_hex = sha512_h.map(|h| hex::encode(h.finalize()));
+    let sha256_hex = sha256_h.map(|h| hex::encode(h.finalize()));
 
     for (algo, expected_hex) in hashes {
         let actual_opt = match algo.as_str() {
             "BLAKE2B" => blake2b_hex.as_deref(),
-            "SHA512"  => sha512_hex.as_deref(),
-            "SHA256"  => sha256_hex.as_deref(),
-            _         => None, // unknown algo — skip
+            "SHA512" => sha512_hex.as_deref(),
+            "SHA256" => sha256_hex.as_deref(),
+            _ => None, // unknown algo — skip
         };
-        if let Some(actual) = actual_opt {
-            if actual != expected_hex.to_lowercase() {
-                return Err(Error::ManifestVerifyFailed {
-                    path: path.to_path_buf(),
-                    reason: format!(
-                        "{} mismatch: expected {}, got {}",
-                        algo, expected_hex, actual
-                    ),
-                });
-            }
+        if let Some(actual) = actual_opt
+            && actual != expected_hex.to_lowercase()
+        {
+            return Err(Error::ManifestVerifyFailed {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "{} mismatch: expected {}, got {}",
+                    algo, expected_hex, actual
+                ),
+            });
         }
     }
 
@@ -158,7 +168,11 @@ impl Manifest {
             let entry = match tag {
                 "DIST" => {
                     let (path, size, hashes) = parse_path_size_hashes(tag, line, lineno)?;
-                    ManifestEntry::Dist { filename: path, size, hashes }
+                    ManifestEntry::Dist {
+                        filename: path,
+                        size,
+                        hashes,
+                    }
                 }
                 "DATA" | "EBUILD" | "MISC" | "AUX" => {
                     let (path, size, hashes) = parse_path_size_hashes(tag, line, lineno)?;
@@ -175,7 +189,9 @@ impl Manifest {
                             lineno + 1
                         ))
                     })?;
-                    ManifestEntry::Ignore { path: path.to_string() }
+                    ManifestEntry::Ignore {
+                        path: path.to_string(),
+                    }
                 }
                 "TIMESTAMP" => {
                     let value = tokens.next().ok_or_else(|| {
@@ -184,7 +200,9 @@ impl Manifest {
                             lineno + 1
                         ))
                     })?;
-                    ManifestEntry::Timestamp { value: value.to_string() }
+                    ManifestEntry::Timestamp {
+                        value: value.to_string(),
+                    }
                 }
                 _ => {
                     // Unknown type tag — skip for forward compatibility.
@@ -200,11 +218,14 @@ impl Manifest {
 
     /// Iterate over `DIST` entries only.
     pub fn dist_entries(&self) -> impl Iterator<Item = &ManifestEntry> {
-        self.entries.iter().filter(|e| matches!(e, ManifestEntry::Dist { .. }))
+        self.entries
+            .iter()
+            .filter(|e| matches!(e, ManifestEntry::Dist { .. }))
     }
 }
 
 /// Parse `tag path size [algo hex ...]` from a whitespace-split line.
+#[allow(clippy::type_complexity)]
 fn parse_path_size_hashes(
     tag: &str,
     line: &str,
@@ -258,10 +279,20 @@ mod tests {
         let manifest = Manifest::parse(input).unwrap();
         assert_eq!(manifest.entries.len(), 1);
         match &manifest.entries[0] {
-            ManifestEntry::Dist { filename, size, hashes } => {
+            ManifestEntry::Dist {
+                filename,
+                size,
+                hashes,
+            } => {
                 assert_eq!(filename, "foo-1.0.tar.gz");
                 assert_eq!(*size, 12345);
-                assert_eq!(hashes, &[("SHA256".into(), "abcd1234".into()), ("SHA512".into(), "ef567890".into())]);
+                assert_eq!(
+                    hashes,
+                    &[
+                        ("SHA256".into(), "abcd1234".into()),
+                        ("SHA512".into(), "ef567890".into())
+                    ]
+                );
             }
             _ => panic!("expected Dist"),
         }
@@ -304,7 +335,10 @@ mod tests {
         let input = "MANIFEST sub/Manifest 99 SHA256 cafebabe\n";
         let manifest = Manifest::parse(input).unwrap();
         assert_eq!(manifest.entries.len(), 1);
-        assert!(matches!(manifest.entries[0], ManifestEntry::SubManifest { .. }));
+        assert!(matches!(
+            manifest.entries[0],
+            ManifestEntry::SubManifest { .. }
+        ));
     }
 
     #[test]
@@ -376,10 +410,10 @@ TIMESTAMP 2024-06-01T00:00:00Z
     fn hello_hashes() -> Vec<(String, String)> {
         use blake2::Digest as _; // covers sha2 types (same underlying trait)
         let blake2b = hex::encode(blake2::Blake2b512::digest(b"hello"));
-        let sha512  = hex::encode(sha2::Sha512::digest(b"hello"));
+        let sha512 = hex::encode(sha2::Sha512::digest(b"hello"));
         vec![
             ("BLAKE2B".to_string(), blake2b),
-            ("SHA512".to_string(),  sha512),
+            ("SHA512".to_string(), sha512),
         ]
     }
 
@@ -401,9 +435,16 @@ TIMESTAMP 2024-06-01T00:00:00Z
         std::io::Write::write_all(&mut f, b"hello").unwrap();
         let mut hashes = hello_hashes();
         hashes[0].1 = "deadbeef".to_string(); // corrupt BLAKE2B hex
-        let entry = ManifestEntry::Dist { filename: "test".into(), size: 5, hashes };
+        let entry = ManifestEntry::Dist {
+            filename: "test".into(),
+            size: 5,
+            hashes,
+        };
         let err = entry.verify_file(f.path()).unwrap_err();
-        assert!(matches!(err, crate::error::Error::ManifestVerifyFailed { .. }));
+        assert!(matches!(
+            err,
+            crate::error::Error::ManifestVerifyFailed { .. }
+        ));
         assert!(err.to_string().contains("BLAKE2B mismatch"));
     }
 
@@ -417,7 +458,10 @@ TIMESTAMP 2024-06-01T00:00:00Z
             hashes: hello_hashes(),
         };
         let err = entry.verify_file(f.path()).unwrap_err();
-        assert!(matches!(err, crate::error::Error::ManifestVerifyFailed { .. }));
+        assert!(matches!(
+            err,
+            crate::error::Error::ManifestVerifyFailed { .. }
+        ));
         assert!(err.to_string().contains("size mismatch"));
     }
 
@@ -436,9 +480,15 @@ TIMESTAMP 2024-06-01T00:00:00Z
 
     #[test]
     fn verify_ignore_noop() {
-        let entry = ManifestEntry::Ignore { path: "some/path".into() };
+        let entry = ManifestEntry::Ignore {
+            path: "some/path".into(),
+        };
         // Path doesn't even need to exist.
-        assert!(entry.verify_file(std::path::Path::new("/nonexistent/path")).is_ok());
+        assert!(
+            entry
+                .verify_file(std::path::Path::new("/nonexistent/path"))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -448,7 +498,9 @@ TIMESTAMP 2024-06-01T00:00:00Z
             size: 5,
             hashes: hello_hashes(),
         };
-        let err = entry.verify_file(std::path::Path::new("/nonexistent/missing.tar.gz")).unwrap_err();
+        let err = entry
+            .verify_file(std::path::Path::new("/nonexistent/missing.tar.gz"))
+            .unwrap_err();
         assert!(matches!(err, crate::error::Error::Io { .. }));
     }
 }

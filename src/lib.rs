@@ -55,5 +55,5 @@ pub use layout::LayoutConf;
 pub use manifest::{Manifest, ManifestEntry};
 pub use package::Package;
 pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
-pub use repository::Repository;
+pub use repository::{ProfileUpdate, Repository};
 pub use shell::EbuildShell;

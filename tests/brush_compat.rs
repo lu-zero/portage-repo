@@ -543,10 +543,7 @@ async fn array_unset_negative_index() {
         "#,
     )
     .await;
-    assert_eq!(
-        got, "a b c",
-        "unset 'arr[-1]' must remove the last element"
-    );
+    assert_eq!(got, "a b c", "unset 'arr[-1]' must remove the last element");
 }
 
 #[tokio::test]
@@ -577,8 +574,7 @@ async fn llvm_set_globals_pattern() {
     )
     .await;
     assert_eq!(
-        got,
-        "+llvm_slot_21 llvm_slot_16 llvm_slot_17 llvm_slot_18 llvm_slot_19 llvm_slot_20",
+        got, "+llvm_slot_21 llvm_slot_16 llvm_slot_17 llvm_slot_18 llvm_slot_19 llvm_slot_20",
         "llvm_set_globals pattern must produce correct IUSE with all slots"
     );
 }
@@ -602,7 +598,10 @@ async fn nameref_scalar_read() {
         "#,
     )
     .await;
-    assert_eq!(got, "hello_world", "reading a nameref should return the target's value");
+    assert_eq!(
+        got, "hello_world",
+        "reading a nameref should return the target's value"
+    );
 }
 
 /// Writing to a nameref must update the target variable, not the nameref itself.
@@ -619,7 +618,10 @@ async fn nameref_scalar_write() {
         "#,
     )
     .await;
-    assert_eq!(got, "modified", "writing to a nameref must update the target variable");
+    assert_eq!(
+        got, "modified",
+        "writing to a nameref must update the target variable"
+    );
 }
 
 /// `declare -n var` with no `=` makes var a nameref pointing to its current value
@@ -658,7 +660,10 @@ async fn nameref_append_write() {
         "#,
     )
     .await;
-    assert_eq!(got, "hello world", "appending via nameref must update the target");
+    assert_eq!(
+        got, "hello world",
+        "appending via nameref must update the target"
+    );
 }
 
 /// Reading an element of an associative array through a nameref.
@@ -674,7 +679,10 @@ async fn nameref_assoc_array_element_read() {
         "#,
     )
     .await;
-    assert_eq!(got, "val1", "nameref to assoc array must allow element reads via [key]");
+    assert_eq!(
+        got, "val1",
+        "nameref to assoc array must allow element reads via [key]"
+    );
 }
 
 /// Iterating keys of an associative array through a nameref with `${!ref[@]}`.

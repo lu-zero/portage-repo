@@ -142,7 +142,7 @@ impl builtins::Command for VerRsCommand {
         let max = parts.len() / 2;
 
         let mut i = 0;
-        while i + 1 <= pairs_args.len() {
+        while i < pairs_args.len() {
             let range_str = &pairs_args[i];
             let repl = &pairs_args[i + 1];
             i += 2;
@@ -170,7 +170,7 @@ impl builtins::Command for VerRsCommand {
         }
 
         let output: String = parts.iter().map(|s| s.as_str()).collect();
-        let _ = write!(context.params.stdout(shell), "{output}\n");
+        let _ = writeln!(context.params.stdout(shell), "{output}");
         Ok(brush_core::ExecutionResult::success())
     }
 }
@@ -238,12 +238,15 @@ impl builtins::Command for VerCutCommand {
 
         let output: String = if array_start < pairs.len() && array_end > array_start {
             let actual_end = array_end.min(pairs.len());
-            pairs[array_start..actual_end].iter().map(|s| s.as_str()).collect()
+            pairs[array_start..actual_end]
+                .iter()
+                .map(|s| s.as_str())
+                .collect()
         } else {
             String::new()
         };
 
-        let _ = write!(context.params.stdout(shell), "{output}\n");
+        let _ = writeln!(context.params.stdout(shell), "{output}");
         Ok(brush_core::ExecutionResult::success())
     }
 }
@@ -277,10 +280,8 @@ fn compare_int(a: &str, b: &str) -> Ordering {
 fn ver_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(
-            r"^([0-9]+(\.[0-9]+)*)([a-z]?)((_(alpha|beta|pre|rc|p)[0-9]*)*)(-r[0-9]+)?$",
-        )
-        .unwrap()
+        Regex::new(r"^([0-9]+(\.[0-9]+)*)([a-z]?)((_(alpha|beta|pre|rc|p)[0-9]*)*)(-r[0-9]+)?$")
+            .unwrap()
     })
 }
 
@@ -483,7 +484,11 @@ impl builtins::Command for VerTestCommand {
                     .env_str("PVR")
                     .map(|cow| cow.into_owned())
                     .unwrap_or_default();
-                (pvr_owned.as_str(), self.args[0].as_str(), self.args[1].as_str())
+                (
+                    pvr_owned.as_str(),
+                    self.args[0].as_str(),
+                    self.args[1].as_str(),
+                )
             }
             3 => (
                 self.args[0].as_str(),
@@ -541,10 +546,7 @@ mod tests {
 
     #[test]
     fn test_ver_split_basic() {
-        assert_eq!(
-            ver_split("3.12.12"),
-            ["", "3", ".", "12", ".", "12"]
-        );
+        assert_eq!(ver_split("3.12.12"), ["", "3", ".", "12", ".", "12"]);
     }
 
     #[test]
@@ -606,22 +608,10 @@ mod tests {
 
     #[test]
     fn test_ver_compare_suffixes() {
-        assert_eq!(
-            ver_compare("1.0_alpha1", "1.0_beta1"),
-            Some(Ordering::Less)
-        );
-        assert_eq!(
-            ver_compare("1.0_rc1", "1.0"),
-            Some(Ordering::Less)
-        );
-        assert_eq!(
-            ver_compare("1.0_p1", "1.0"),
-            Some(Ordering::Greater)
-        );
-        assert_eq!(
-            ver_compare("1.0_p1", "1.0_p2"),
-            Some(Ordering::Less)
-        );
+        assert_eq!(ver_compare("1.0_alpha1", "1.0_beta1"), Some(Ordering::Less));
+        assert_eq!(ver_compare("1.0_rc1", "1.0"), Some(Ordering::Less));
+        assert_eq!(ver_compare("1.0_p1", "1.0"), Some(Ordering::Greater));
+        assert_eq!(ver_compare("1.0_p1", "1.0_p2"), Some(Ordering::Less));
     }
 
     #[test]

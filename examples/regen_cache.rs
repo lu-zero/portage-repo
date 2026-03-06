@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::process;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};

@@ -30,7 +30,9 @@ async fn ver_test(sh: &mut EbuildShell, args: &str) -> bool {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let ver = env::args().nth(1).unwrap_or_else(|| "7.1.3_rc2-r4".to_string());
+    let ver = env::args()
+        .nth(1)
+        .unwrap_or_else(|| "7.1.3_rc2-r4".to_string());
 
     // Build a throwaway shell — ver_* builtins need no real repository content.
     let tmp = tempfile::tempdir().expect("create tempdir");
@@ -75,10 +77,10 @@ async fn main() {
         ("3.11", "-ne", "3.12"),
         ("3.11", "-lt", "3.12"),
         ("3.11", "-le", "3.12"),
-        ("3.12", "-gt", "3.12"),  // false
+        ("3.12", "-gt", "3.12"), // false
         ("1.0_alpha1", "-lt", "1.0"),
-        ("1.0_rc1",    "-lt", "1.0"),
-        ("1.0",        "-lt", "1.0_p1"),
+        ("1.0_rc1", "-lt", "1.0"),
+        ("1.0", "-lt", "1.0_p1"),
     ];
     for (a, op, b) in cases {
         let result = ver_test(&mut sh, &format!("{a} {op} {b}")).await;

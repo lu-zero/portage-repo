@@ -84,21 +84,25 @@ Fields are read and stacked by `ProfileStack` but have no separate EAPI guard
 
 
 #### `profiles/updates/` directory (PMS 4.4.4)
-Package move/slotmove updates not implemented.
+Implemented: `Repository::profile_updates()` returns `Vec<ProfileUpdate>` with
+`Move { old: Cpn, new: Cpn }` and `SlotMove { dep: Dep, old_slot, new_slot }` variants.
+Unknown tags are silently skipped for forward-compatibility.
 
 #### Legacy metadata cache format (PMS 14.2)
 Only md5-dict (`metadata/md5-cache/`) is supported. The positional line-based
 `metadata/cache/` format is not implemented.
 
 #### `ver_replacing` command (PMS 12.3.14, EAPI 9)
-Not implemented.
+Implemented as a no-op stub (returns exit 0 with no output). During metadata
+extraction no package is being replaced, so this is always correct.
 
 #### Bash compatibility per EAPI (PMS 6, Table 6.1)
 `BASH_COMPAT` is not set per EAPI. PMS requires bash 3.2 for EAPIs 0–5,
 4.2 for EAPIs 6–7, 5.0 for EAPI 8, 5.3 for EAPI 9.
 
 #### `failglob` in global scope (PMS 6)
-For EAPIs 6+, the `failglob` option should be set in global scope. Not done.
+Implemented: `source_ebuild` sets `shopt -s failglob` for EAPI >= 6 and
+`shopt -u failglob` otherwise. The option is reset on each ebuild sourcing call.
 
 ---
 

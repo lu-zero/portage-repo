@@ -17,9 +17,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
@@ -50,11 +49,7 @@ async fn process_ebuild(
         let category = ebuild.category();
         let cat_dir = dir.join(category);
         fs::create_dir_all(&cat_dir).map_err(|e| format!("mkdir: {e}"))?;
-        let cpv_file = cat_dir.join(format!(
-            "{}-{}",
-            ebuild.name(),
-            ebuild.version()
-        ));
+        let cpv_file = cat_dir.join(format!("{}-{}", ebuild.name(), ebuild.version()));
         fs::write(&cpv_file, entry.serialize()).map_err(|e| format!("write: {e}"))?;
     }
 
@@ -138,13 +133,8 @@ async fn main() {
         handles.push(tokio::spawn(async move {
             let masters: Vec<portage_repo::Repository> = vec![];
             while let Ok(ebuild) = rx.recv_async().await {
-                if let Err(e) = process_ebuild(
-                    &repo,
-                    &masters,
-                    &ebuild,
-                    out_dir.as_ref().as_ref(),
-                )
-                .await
+                if let Err(e) =
+                    process_ebuild(&repo, &masters, &ebuild, out_dir.as_ref().as_ref()).await
                 {
                     let cpv = ebuild.cpv();
                     eprintln!("ERROR {cpv}: {e}");

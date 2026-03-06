@@ -367,9 +367,10 @@ impl ProfileStack {
 /// `visited` is a set of canonicalized paths already added; a profile seen a
 /// second time (diamond inheritance or cycle) is silently skipped.
 fn collect_stack(path: PathBuf, visited: &mut HashSet<PathBuf>) -> Result<Vec<Profile>> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| Error::Io { path: path.clone(), source: e })?;
+    let canonical = path.canonicalize().map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
     if !visited.insert(canonical.clone()) {
         return Ok(vec![]);
     }
@@ -390,7 +391,10 @@ fn collect_stack(path: PathBuf, visited: &mut HashSet<PathBuf>) -> Result<Vec<Pr
 fn read_profile_file(path: &Path) -> Result<Vec<String>> {
     if path.is_dir() {
         let mut children: Vec<PathBuf> = std::fs::read_dir(path)
-            .map_err(|e| Error::Io { path: path.to_path_buf(), source: e })?
+            .map_err(|e| Error::Io {
+                path: path.to_path_buf(),
+                source: e,
+            })?
             .filter_map(|e| e.ok())
             .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
             .map(|e| e.path())
@@ -596,7 +600,10 @@ mod tests {
 
         let stack = ProfileStack::build(leaf).unwrap();
         let masked = stack.use_mask().unwrap();
-        assert!(!masked.contains(&"foo".to_string()), "foo should be unmasked");
+        assert!(
+            !masked.contains(&"foo".to_string()),
+            "foo should be unmasked"
+        );
         assert!(masked.contains(&"bar".to_string()));
         assert!(masked.contains(&"baz".to_string()));
     }

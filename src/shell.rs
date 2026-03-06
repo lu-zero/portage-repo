@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 
 use brush_builtins::ShellBuilderExt;
 use brush_core::parser::ParserImpl;
-use brush_core::{ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo};
+use brush_core::{
+    ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo,
+};
 use portage_metadata::{Eapi, EbuildMetadata, Phase};
 
 use crate::builtins;
@@ -114,17 +116,50 @@ impl EbuildShell {
 
         // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
         for (name, builtin) in [
-            ("die",        brush_core::builtins::builtin::<pms_builtins::DieCommand, _>()),
-            ("EXPORT_FUNCTIONS", brush_core::builtins::builtin::<pms_builtins::ExportFunctionsCommand, _>()),
-            ("has",        brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
-            ("hasv",       brush_core::builtins::builtin::<pms_builtins::HasvCommand, _>()),
-            ("hasq",       brush_core::builtins::builtin::<pms_builtins::HasCommand, _>()),
-            ("use",        brush_core::builtins::builtin::<pms_builtins::UseCommand, _>()),
-            ("usev",       brush_core::builtins::builtin::<pms_builtins::UsevCommand, _>()),
-            ("usex",       brush_core::builtins::builtin::<pms_builtins::UsexCommand, _>()),
-            ("use_enable", brush_core::builtins::builtin::<pms_builtins::UseEnableCommand, _>()),
-            ("use_with",   brush_core::builtins::builtin::<pms_builtins::UseWithCommand, _>()),
-            ("in_iuse",    brush_core::builtins::builtin::<pms_builtins::InIuseCommand, _>()),
+            (
+                "die",
+                brush_core::builtins::builtin::<pms_builtins::DieCommand, _>(),
+            ),
+            (
+                "EXPORT_FUNCTIONS",
+                brush_core::builtins::builtin::<pms_builtins::ExportFunctionsCommand, _>(),
+            ),
+            (
+                "has",
+                brush_core::builtins::builtin::<pms_builtins::HasCommand, _>(),
+            ),
+            (
+                "hasv",
+                brush_core::builtins::builtin::<pms_builtins::HasvCommand, _>(),
+            ),
+            (
+                "hasq",
+                brush_core::builtins::builtin::<pms_builtins::HasCommand, _>(),
+            ),
+            (
+                "use",
+                brush_core::builtins::builtin::<pms_builtins::UseCommand, _>(),
+            ),
+            (
+                "usev",
+                brush_core::builtins::builtin::<pms_builtins::UsevCommand, _>(),
+            ),
+            (
+                "usex",
+                brush_core::builtins::builtin::<pms_builtins::UsexCommand, _>(),
+            ),
+            (
+                "use_enable",
+                brush_core::builtins::builtin::<pms_builtins::UseEnableCommand, _>(),
+            ),
+            (
+                "use_with",
+                brush_core::builtins::builtin::<pms_builtins::UseWithCommand, _>(),
+            ),
+            (
+                "in_iuse",
+                brush_core::builtins::builtin::<pms_builtins::InIuseCommand, _>(),
+            ),
         ] {
             shell.register_builtin(name, builtin);
         }
@@ -145,6 +180,12 @@ impl EbuildShell {
         shell.register_builtin(
             "ver_test",
             brush_core::builtins::builtin::<ver_funcs::VerTestCommand, _>(),
+        );
+        // ver_replacing (EAPI 9): outputs versions being replaced; always
+        // empty during metadata extraction.
+        shell.register_builtin(
+            "ver_replacing",
+            brush_core::builtins::builtin::<pms_builtins::VerReplacingCommand, _>(),
         );
 
         let mut ebuild_shell = EbuildShell {
@@ -307,6 +348,14 @@ impl EbuildShell {
             self.set_var(&format!("E_{var}"), "");
         }
         self.set_var("INHERITED", "");
+
+        // EAPI 6+ requires failglob in global scope (PMS 6, Table 6.1).
+        // Reset each call so re-used shells get the right state per ebuild.
+        if eapi >= Eapi::Six {
+            self.run_string("shopt -s failglob").await?;
+        } else {
+            self.run_string("shopt -u failglob").await?;
+        }
 
         // Source the ebuild — `inherit` is a Rust builtin that accumulates
         // each eclass's contribution into E_{VAR} and restores the var after

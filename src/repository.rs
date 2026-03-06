@@ -5,6 +5,29 @@ use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
 
+/// A single package-move or slot-move entry from `profiles/updates/`.
+///
+/// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProfileUpdate {
+    /// `move <old> <new>` — package renamed.
+    Move {
+        /// Old category/package name.
+        old: Cpn,
+        /// New category/package name.
+        new: Cpn,
+    },
+    /// `slotmove <dep> <old_slot> <new_slot>` — slot renamed.
+    SlotMove {
+        /// Atom (possibly versioned) identifying affected packages.
+        dep: Dep,
+        /// Old slot value.
+        old_slot: String,
+        /// New slot value.
+        new_slot: String,
+    },
+}
+
 use crate::category::Category;
 use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
@@ -86,11 +109,10 @@ impl Repository {
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn ebuilds(&self) -> Result<Vec<Ebuild>> {
-        let categories: HashSet<String> = util::read_lines(
-            &self.path.join("profiles").join("categories"),
-        )?
-        .into_iter()
-        .collect();
+        let categories: HashSet<String> =
+            util::read_lines(&self.path.join("profiles").join("categories"))?
+                .into_iter()
+                .collect();
 
         let mut ebuilds: Vec<Ebuild> = WalkDir::new(&self.path)
             .min_depth(3)
@@ -193,9 +215,11 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn repo_package_mask(&self) -> Result<Vec<Dep>> {
-        let lines =
-            util::read_lines(&self.path.join("profiles").join("package.mask"))?;
-        lines.into_iter().map(|l| Dep::parse(&l).map_err(Into::into)).collect()
+        let lines = util::read_lines(&self.path.join("profiles").join("package.mask"))?;
+        lines
+            .into_iter()
+            .map(|l| Dep::parse(&l).map_err(Into::into))
+            .collect()
     }
 
     /// List available USE_EXPAND variable names from `profiles/desc/`.
@@ -216,10 +240,10 @@ impl Repository {
             let entry = entry.map_err(|e| util::io_err(&dir, e))?;
             let fname = entry.file_name();
             let fname = fname.to_string_lossy();
-            if let Some(stem) = fname.strip_suffix(".desc") {
-                if !stem.starts_with('.') {
-                    names.push(stem.to_string());
-                }
+            if let Some(stem) = fname.strip_suffix(".desc")
+                && !stem.starts_with('.')
+            {
+                names.push(stem.to_string());
             }
         }
         names.sort();
@@ -234,11 +258,65 @@ impl Repository {
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn use_expand_desc(&self, name: &str) -> Result<Vec<(String, String)>> {
         parse_desc_file(
-            &self.path
+            &self
+                .path
                 .join("profiles")
                 .join("desc")
                 .join(format!("{name}.desc")),
         )
+    }
+
+    /// Parse all package-move and slot-move entries from `profiles/updates/`.
+    ///
+    /// Files are read in sorted order (oldest first by filename convention).
+    /// Lines with unrecognised tags or parse errors are silently skipped.
+    ///
+    /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
+    pub fn profile_updates(&self) -> Result<Vec<ProfileUpdate>> {
+        let dir = self.path.join("profiles").join("updates");
+        let mut files: Vec<_> = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries
+                .filter_map(|e| e.ok())
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .map(|e| e.path())
+                .collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(util::io_err(&dir, e)),
+        };
+        files.sort();
+
+        let mut updates = Vec::new();
+        for file in files {
+            for line in util::read_lines(&file)? {
+                let mut parts = line.split_whitespace();
+                match parts.next() {
+                    Some("move") => {
+                        let (Some(old_s), Some(new_s)) = (parts.next(), parts.next()) else {
+                            continue;
+                        };
+                        let (Ok(old), Ok(new)) = (Cpn::parse(old_s), Cpn::parse(new_s)) else {
+                            continue;
+                        };
+                        updates.push(ProfileUpdate::Move { old, new });
+                    }
+                    Some("slotmove") => {
+                        let (Some(dep_s), Some(old_s), Some(new_s)) =
+                            (parts.next(), parts.next(), parts.next())
+                        else {
+                            continue;
+                        };
+                        let Ok(dep) = Dep::parse(dep_s) else { continue };
+                        updates.push(ProfileUpdate::SlotMove {
+                            dep,
+                            old_slot: old_s.to_string(),
+                            new_slot: new_s.to_string(),
+                        });
+                    }
+                    _ => continue, // unknown tag — skip
+                }
+            }
+        }
+        Ok(updates)
     }
 
     /// Open a profile directory relative to `profiles/`.
@@ -518,7 +596,10 @@ mod tests {
 
         let descs = repo.use_expand_desc("cpu_flags_x86").unwrap();
         assert_eq!(descs.len(), 2);
-        assert_eq!(descs[0], ("mmx".to_string(), "MMX instruction support".to_string()));
+        assert_eq!(
+            descs[0],
+            ("mmx".to_string(), "MMX instruction support".to_string())
+        );
         assert_eq!(descs[1], ("sse2".to_string(), "SSE2 support".to_string()));
     }
 
@@ -527,5 +608,51 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         assert!(repo.use_expand_desc("nonexistent").unwrap().is_empty());
+    }
+
+    #[test]
+    fn profile_updates_absent_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        assert!(repo.profile_updates().unwrap().is_empty());
+    }
+
+    #[test]
+    fn profile_updates_parses_move_and_slotmove() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let updates_dir = dir.path().join("profiles").join("updates");
+        std::fs::create_dir_all(&updates_dir).unwrap();
+        std::fs::write(
+            updates_dir.join("1Q-2024"),
+            "# comment\nmove dev-libs/foo dev-libs/bar\nslotmove >=dev-libs/baz-1.0 0 1\n",
+        )
+        .unwrap();
+
+        let updates = repo.profile_updates().unwrap();
+        assert_eq!(updates.len(), 2);
+        assert!(matches!(&updates[0], ProfileUpdate::Move { old, new }
+            if old.to_string() == "dev-libs/foo" && new.to_string() == "dev-libs/bar"));
+        assert!(
+            matches!(&updates[1], ProfileUpdate::SlotMove { old_slot, new_slot, .. }
+            if old_slot == "0" && new_slot == "1")
+        );
+    }
+
+    #[test]
+    fn profile_updates_skips_unknown_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let updates_dir = dir.path().join("profiles").join("updates");
+        std::fs::create_dir_all(&updates_dir).unwrap();
+        std::fs::write(
+            updates_dir.join("1Q-2024"),
+            "unknown_tag foo bar\nmove dev-libs/a dev-libs/b\n",
+        )
+        .unwrap();
+
+        let updates = repo.profile_updates().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(&updates[0], ProfileUpdate::Move { .. }));
     }
 }
