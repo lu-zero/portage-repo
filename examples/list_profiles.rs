@@ -194,14 +194,66 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
     };
     match stack.configure_shell(&mut shell, &[]).await {
         Ok(()) => {
-            let mut flags: Vec<String> = shell
+            let flags: Vec<String> = shell
                 .use_flags_string()
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
-            flags.sort();
-            println!("  ({} flags)", flags.len());
-            print_wrapped(&flags, 4);
+
+            // Build prefix table from $USE_EXPAND: group name → lowercase prefix.
+            // Sort longest-prefix-first so e.g. "cpu_flags_x86" beats "cpu_flags".
+            let mut prefixes: Vec<(String, String)> = shell
+                .get_var("USE_EXPAND")
+                .unwrap_or_default()
+                .split_whitespace()
+                .map(|g| (g.to_lowercase(), g.to_lowercase()))
+                .collect();
+            prefixes.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+            // Bucket each flag: find the first (longest) matching USE_EXPAND prefix.
+            let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+                std::collections::BTreeMap::new();
+            for flag in &flags {
+                let bucket = prefixes
+                    .iter()
+                    .find(|(prefix, _)| flag.starts_with(&format!("{prefix}_")))
+                    .map(|(_, group)| group.as_str())
+                    .unwrap_or("global");
+                let value = if bucket == "global" {
+                    flag.clone()
+                } else {
+                    flag[bucket.len() + 1..].to_string() // strip "group_" prefix
+                };
+                groups.entry(bucket.to_string()).or_default().push(value);
+            }
+
+            println!("  ({} flags across {} groups)", flags.len(), groups.len());
+            println!();
+            for (group, mut values) in groups {
+                values.sort();
+                print!("  [{group}]");
+                let header_len = group.len() + 4; // "  [group]".len()
+                let indent = " ".repeat(header_len);
+                let max_width = 100;
+                let mut line = String::new();
+                for value in &values {
+                    if line.len() + value.len() + 1 > max_width - header_len
+                        && !line.is_empty()
+                    {
+                        println!("  {line}");
+                        line = format!("{indent}{value}");
+                    } else {
+                        if !line.is_empty() {
+                            line.push(' ');
+                        }
+                        line.push_str(value);
+                    }
+                }
+                if !line.is_empty() {
+                    println!("  {line}");
+                }
+            }
+            println!();
         }
         Err(e) => eprintln!("  Error resolving USE flags: {e}"),
     }
