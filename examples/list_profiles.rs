@@ -116,6 +116,10 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
         }
     };
 
+    // Build the prefix table once from the repository's USE_EXPAND groups.
+    // Sorted longest-first so "cpu_flags_x86" is matched before "cpu_flags".
+    let prefixes = build_prefixes(repo);
+
     println!("Profile:    {profile_path}");
     println!("Deprecated: {}", stack.is_deprecated());
     println!();
@@ -128,34 +132,10 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
     println!();
 
     // ── use.force / use.mask ──────────────────────────────────────────────
-    if let Ok(force) = stack.use_force() {
-        if !force.is_empty() {
-            let mut sorted = force.clone();
-            sorted.sort();
-            println!("=== use.force ({} flags) ===", sorted.len());
-            print_wrapped(&sorted, 6);
-        }
-    }
-    if let Ok(mask) = stack.use_mask() {
-        if !mask.is_empty() {
-            let mut sorted = mask.clone();
-            sorted.sort();
-            println!("=== use.mask ({} flags) ===", sorted.len());
-            print_wrapped(&sorted, 6);
-        }
-    }
-    if let Ok(sf) = stack.use_stable_force() {
-        if !sf.is_empty() {
-            println!("=== use.stable.force ({} flags) ===", sf.len());
-            print_wrapped(&sf, 6);
-        }
-    }
-    if let Ok(sm) = stack.use_stable_mask() {
-        if !sm.is_empty() {
-            println!("=== use.stable.mask ({} flags) ===", sm.len());
-            print_wrapped(&sm, 6);
-        }
-    }
+    print_use_set("use.force", stack.use_force(), &prefixes);
+    print_use_set("use.mask", stack.use_mask(), &prefixes);
+    print_use_set("use.stable.force", stack.use_stable_force(), &prefixes);
+    print_use_set("use.stable.mask", stack.use_stable_mask(), &prefixes);
 
     // ── System packages ───────────────────────────────────────────────────
     if let Ok(pkgs) = stack.packages() {
@@ -199,83 +179,105 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
-
-            // Build prefix table from $USE_EXPAND: group name → lowercase prefix.
-            // Sort longest-prefix-first so e.g. "cpu_flags_x86" beats "cpu_flags".
-            let mut prefixes: Vec<(String, String)> = shell
-                .get_var("USE_EXPAND")
-                .unwrap_or_default()
-                .split_whitespace()
-                .map(|g| (g.to_lowercase(), g.to_lowercase()))
-                .collect();
-            prefixes.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
-
-            // Bucket each flag: find the first (longest) matching USE_EXPAND prefix.
-            let mut groups: std::collections::BTreeMap<String, Vec<String>> =
-                std::collections::BTreeMap::new();
-            for flag in &flags {
-                let bucket = prefixes
-                    .iter()
-                    .find(|(prefix, _)| flag.starts_with(&format!("{prefix}_")))
-                    .map(|(_, group)| group.as_str())
-                    .unwrap_or("global");
-                let value = if bucket == "global" {
-                    flag.clone()
-                } else {
-                    flag[bucket.len() + 1..].to_string() // strip "group_" prefix
-                };
-                groups.entry(bucket.to_string()).or_default().push(value);
-            }
-
+            // For resolved flags prefer the profile's own $USE_EXPAND, which
+            // may include groups not present in profiles/desc/*.desc.
+            let shell_prefixes = build_prefixes_from_var(
+                &shell.get_var("USE_EXPAND").unwrap_or_default(),
+            );
+            let groups = group_flags(&flags, &shell_prefixes);
             println!("  ({} flags across {} groups)", flags.len(), groups.len());
             println!();
-            for (group, mut values) in groups {
-                values.sort();
-                print!("  [{group}]");
-                let header_len = group.len() + 4; // "  [group]".len()
-                let indent = " ".repeat(header_len);
-                let max_width = 100;
-                let mut line = String::new();
-                for value in &values {
-                    if line.len() + value.len() + 1 > max_width - header_len
-                        && !line.is_empty()
-                    {
-                        println!("  {line}");
-                        line = format!("{indent}{value}");
-                    } else {
-                        if !line.is_empty() {
-                            line.push(' ');
-                        }
-                        line.push_str(value);
-                    }
-                }
-                if !line.is_empty() {
-                    println!("  {line}");
-                }
-            }
-            println!();
+            print_grouped(&groups);
         }
         Err(e) => eprintln!("  Error resolving USE flags: {e}"),
     }
 }
 
-/// Print a list of strings wrapped at 100 columns with the given indent.
-fn print_wrapped(items: &[String], indent: usize) {
-    let indent_str = " ".repeat(indent);
-    let max_width = 100;
-    let mut line = indent_str.clone();
-    for item in items {
-        if line.len() + item.len() + 1 > max_width && !line.trim().is_empty() {
-            println!("{line}");
-            line = indent_str.clone();
-        }
-        if !line.trim().is_empty() {
-            line.push(' ');
-        }
-        line.push_str(item);
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Build the prefix table from `profiles/desc/*.desc` (no shell needed).
+fn build_prefixes(repo: &Repository) -> Vec<String> {
+    let mut names = repo.use_expand_names().unwrap_or_default();
+    // Lowercase and sort longest-first so longer prefixes match before shorter ones.
+    names.iter_mut().for_each(|n| n.make_ascii_lowercase());
+    names.sort_by(|a, b| b.len().cmp(&a.len()));
+    names
+}
+
+/// Build the prefix table from a space-separated `$USE_EXPAND` string.
+fn build_prefixes_from_var(var: &str) -> Vec<String> {
+    let mut names: Vec<String> = var
+        .split_whitespace()
+        .map(|g| g.to_lowercase())
+        .collect();
+    names.sort_by(|a, b| b.len().cmp(&a.len()));
+    names
+}
+
+/// Bucket `flags` into a `BTreeMap<group, values>` using the prefix table.
+///
+/// Each flag is stripped of its `group_` prefix; flags with no matching group
+/// go into `"global"`.
+fn group_flags(
+    flags: &[String],
+    prefixes: &[String],
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for flag in flags {
+        let bucket = prefixes
+            .iter()
+            .find(|prefix| flag.starts_with(format!("{prefix}_").as_str()))
+            .map(String::as_str)
+            .unwrap_or("global");
+        let value = if bucket == "global" {
+            flag.clone()
+        } else {
+            flag[bucket.len() + 1..].to_string()
+        };
+        groups.entry(bucket.to_string()).or_default().push(value);
     }
-    if !line.trim().is_empty() {
-        println!("{line}");
+    groups
+}
+
+/// Print a USE flag set (force/mask/etc.) grouped by USE_EXPAND, if non-empty.
+fn print_use_set(
+    name: &str,
+    result: portage_repo::Result<Vec<String>>,
+    prefixes: &[String],
+) {
+    let Ok(flags) = result else { return };
+    if flags.is_empty() {
+        return;
+    }
+    let groups = group_flags(&flags, prefixes);
+    println!("=== {name} ({} flags) ===", flags.len());
+    print_grouped(&groups);
+}
+
+/// Print a grouped flag map: one `[group]  val val val` line per group,
+/// wrapping at 100 columns with aligned continuation lines.
+fn print_grouped(groups: &std::collections::BTreeMap<String, Vec<String>>) {
+    const MAX_WIDTH: usize = 100;
+    for (group, values) in groups {
+        let mut values = values.clone();
+        values.sort();
+        // "  [group]" prefix; continuation lines are indented to match.
+        let header = format!("  [{group}]");
+        let indent = " ".repeat(header.len());
+        print!("{header}");
+        let mut col = header.len();
+        for value in &values {
+            // +1 for the separating space
+            if col > header.len() && col + 1 + value.len() > MAX_WIDTH {
+                println!();
+                print!("{indent}");
+                col = indent.len();
+            }
+            print!(" {value}");
+            col += 1 + value.len();
+        }
+        println!();
     }
     println!();
 }
