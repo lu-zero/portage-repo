@@ -61,8 +61,7 @@ fn main() {
                     Ok(values) => {
                         println!("  [{group}] ({} values)", values.len());
                         for (val, desc) in &values {
-                            let flag = format!("{group}_{val}");
-                            println!("    {flag:<40} {desc}");
+                            println!("    {val:<40} {desc}");
                         }
                     }
                     Err(e) => eprintln!("  warning: {group}: {e}"),
