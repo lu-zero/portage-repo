@@ -1,3 +1,31 @@
+//! Source every ebuild in a repository and compare the extracted metadata
+//! against the existing `metadata/md5-cache/` entries.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run --release --example regen_cache -- <repo-path> [filter] [--repos-dir <dir>] [--jobs <N>]
+//! ```
+//!
+//! # Examples
+//!
+//! ```text
+//! # Single ebuild
+//! cargo run --release --example regen_cache -- gentoo 'dev-lang/rust-1.88.0'
+//!
+//! # Whole category
+//! cargo run --release --example regen_cache -- gentoo 'dev-lang/*'
+//!
+//! # Full tree (~32K ebuilds)
+//! cargo run --release --example regen_cache -- gentoo
+//!
+//! # Overlay with masters
+//! cargo run --release --example regen_cache -- /var/db/repos/my-overlay --repos-dir /var/db/repos
+//! ```
+//!
+//! Progress is written to stderr; the final stats table goes to stdout.
+//! Exit code is 1 if there are any sourcing errors or metadata mismatches.
+
 use std::collections::BTreeMap;
 use std::env;
 use std::process;
@@ -237,19 +265,6 @@ async fn process_ebuild(
     (stats, diffs)
 }
 
-/// Regenerate metadata cache and compare against existing md5-cache.
-///
-/// Usage: regen_cache <repo-path> [filter] [--repos-dir <dir>] [--jobs <N>]
-///
-/// If `--repos-dir` is given, master repositories listed in `layout.conf`
-/// are resolved from that directory and their eclasses are available to
-/// `inherit`.
-///
-/// Examples:
-///   regen_cache gentoo
-///   regen_cache gentoo 'dev-lang/*'
-///   regen_cache /var/db/repos/my-overlay --repos-dir /var/db/repos
-///   regen_cache gentoo --jobs 8
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = env::args().collect();
