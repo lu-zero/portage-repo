@@ -1,3 +1,14 @@
+//! Print a summary of a repository's contents: category / package / ebuild
+//! counts, plus eclass and license totals.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run --example enumerate_repo -- [path/to/repo]
+//! ```
+//!
+//! Defaults to `/var/db/repos/gentoo` when no path is given.
+
 use std::env;
 
 use portage_repo::Repository;

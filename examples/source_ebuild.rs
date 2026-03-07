@@ -1,13 +1,23 @@
+//! Source a single ebuild through the embedded bash shell and print the
+//! extracted PMS metadata variables.
+//!
+//! # Usage
+//!
+//! ```text
+//! cargo run --example source_ebuild -- <repo-path> <category/package-version>
+//! ```
+//!
+//! # Example
+//!
+//! ```text
+//! cargo run --example source_ebuild -- gentoo dev-lang/rust-1.75.0
+//! ```
+
 use std::env;
 use std::process;
 
 use portage_repo::Repository;
 
-/// Source an ebuild through the embedded bash shell and print its metadata.
-///
-/// Usage: source_ebuild <repo-path> <category/package-version>
-///
-/// Example: source_ebuild /var/db/repos/gentoo dev-lang/rust-1.75.0
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let args: Vec<String> = env::args().collect();
