@@ -57,15 +57,16 @@ impl UseExpand {
     /// Flags with no matching prefix are placed in the `"global"` group.
     ///
     /// Values within each group are **not** sorted — the caller decides order.
-    /// Values are slices into the original flag strings — no allocation per flag.
-    pub fn group<'f>(
-        &self,
+    /// Keys borrow from `self.prefixes` (or `"global"`); values borrow from
+    /// the input flag strings — no allocations at all.
+    pub fn group<'s, 'f>(
+        &'s self,
         flags: impl IntoIterator<Item = &'f str>,
-    ) -> BTreeMap<String, Vec<&'f str>> {
-        let mut groups: BTreeMap<String, Vec<&'f str>> = BTreeMap::new();
+    ) -> BTreeMap<&'s str, Vec<&'f str>> {
+        let mut groups: BTreeMap<&'s str, Vec<&'f str>> = BTreeMap::new();
         for flag in flags {
             let (bucket, value) = self.split(flag);
-            groups.entry(bucket.to_string()).or_default().push(value);
+            groups.entry(bucket).or_default().push(value);
         }
         groups
     }

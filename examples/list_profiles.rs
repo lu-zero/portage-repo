@@ -211,7 +211,10 @@ fn print_use_set(
 
 /// Print a grouped flag map: one `[group]  val val val` line per group,
 /// wrapping at 100 columns with aligned continuation lines.
-fn print_grouped<S: AsRef<str>>(groups: &std::collections::BTreeMap<String, Vec<S>>) {
+fn print_grouped<K: AsRef<str>, S: AsRef<str>>(groups: &std::collections::BTreeMap<K, Vec<S>>)
+where
+    K: std::fmt::Display,
+{
     const MAX_WIDTH: usize = 100;
     for (group, values) in groups {
         let mut values: Vec<&str> = values.iter().map(S::as_ref).collect();
