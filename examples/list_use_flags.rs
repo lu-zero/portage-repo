@@ -26,17 +26,28 @@ fn main() {
         }
     };
 
+    let expand = repo.use_expand().unwrap_or_default();
+
     // ── 1. Global USE flags ──────────────────────────────────────────────────
     println!("=== Global USE flags (profiles/use.desc) ===");
     match repo.use_desc() {
         Ok(flags) => {
-            // use_desc returns pairs in file order; sort alphabetically.
-            let mut sorted: Vec<_> = flags.into_iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            for (flag, desc) in &sorted {
-                println!("  {flag:<30} {desc}");
+            let flags: BTreeMap<_, _> = flags.into_iter().collect();
+            let groups = expand.group(flags.keys().map(String::as_str));
+            for (group, values) in &groups {
+                if *group == "global" {
+                    for &flag in values {
+                        println!("  {flag:<30} {}", flags[flag]);
+                    }
+                } else {
+                    println!("  [{group}]");
+                    for &value in values {
+                        let full = format!("{group}_{value}");
+                        println!("    {value:<28} {}", flags[&full]);
+                    }
+                }
             }
-            println!("  ({} global flags)\n", sorted.len());
+            println!("  ({} global flags)\n", flags.len());
         }
         Err(e) => eprintln!("  warning: {e}\n"),
     }
@@ -95,8 +106,6 @@ fn main() {
             }
         }
     }
-
-    let expand = repo.use_expand().unwrap_or_default();
 
     let total_pkg_flags: usize = pkg_flags.values().map(|m| m.len()).sum();
     for (cpn, flags) in &pkg_flags {
