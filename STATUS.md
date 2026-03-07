@@ -17,6 +17,11 @@ Target specification: [PMS 9](https://projects.gentoo.org/pms/9/pms.html)
 - `profiles/package.mask` — repo-level package masks (`Repository::repo_package_mask`)
 - `profiles/desc/` — USE_EXPAND flag descriptions (`Repository::use_expand_names`,
   `Repository::use_expand_desc`)
+- `profiles/use.desc` / `profiles/use.local.desc` — global and per-package USE flag
+  descriptions (`Repository::use_desc`, `Repository::use_local_desc`)
+- `UseExpand` — buckets a flat USE flag list into groups by prefix, with `Repository::use_expand()`
+  convenience constructor and `UseExpand::from_var()` for the shell's `$USE_EXPAND`
+- `Package::metadata_xml()` — parses `metadata.xml` USE flag descriptions (`PkgMetadata`)
 
 #### Profiles (PMS 5)
 - `parent`, `eapi`, `packages`, `package.mask`, `package.use`

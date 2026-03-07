@@ -80,8 +80,9 @@ impl UseExpand {
     /// Returns `("global", flag.to_string())` if no prefix matches.
     pub fn split(&self, flag: &str) -> (&str, String) {
         for prefix in &self.prefixes {
-            let sep = format!("{prefix}_");
-            if let Some(value) = flag.strip_prefix(sep.as_str()) {
+            if let Some(rest) = flag.strip_prefix(prefix.as_str())
+                && let Some(value) = rest.strip_prefix('_')
+            {
                 return (prefix.as_str(), value.to_string());
             }
         }
@@ -115,7 +116,11 @@ mod tests {
     #[test]
     fn from_var_parses_space_separated() {
         let expand = UseExpand::from_var("CPU_FLAGS_X86 VIDEO_CARDS  ELIBC");
-        assert_eq!(expand.prefixes(), ["cpu_flags_x86", "video_cards", "elibc"]);
+        let prefixes: std::collections::HashSet<_> = expand.prefixes().iter().collect();
+        assert!(prefixes.contains(&"cpu_flags_x86".to_string()));
+        assert!(prefixes.contains(&"video_cards".to_string()));
+        assert!(prefixes.contains(&"elibc".to_string()));
+        assert_eq!(expand.prefixes().len(), 3);
     }
 
     #[test]

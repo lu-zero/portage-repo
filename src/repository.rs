@@ -225,10 +225,8 @@ impl Repository {
 
     /// Build a [`UseExpand`] grouper from this repository's `profiles/desc/` names.
     ///
-    /// This is a convenience wrapper around [`use_expand_names`] that constructs
-    /// the grouper ready for [`UseExpand::group`] calls.
-    ///
-    /// [`use_expand_names`]: Repository::use_expand_names
+    /// This is a convenience wrapper around [`Repository::use_expand_names`] that
+    /// constructs the grouper ready for [`UseExpand::group`] calls.
     pub fn use_expand(&self) -> Result<UseExpand> {
         Ok(UseExpand::new(self.use_expand_names()?))
     }
