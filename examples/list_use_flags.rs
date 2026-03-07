@@ -102,20 +102,17 @@ fn main() {
     for (cpn, flags) in &pkg_flags {
         println!("  [{cpn}]");
         // Group flags by USE_EXPAND prefix; truly global flags are shown flat.
-        let mut groups: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
-        for (flag, desc) in flags {
-            let (group, value) = expand.split(flag);
-            groups.entry(group).or_default().push((value, desc.as_str()));
-        }
+        let groups = expand.group(flags.keys().map(String::as_str));
         for (group, values) in &groups {
             if *group == "global" {
-                for (flag, desc) in values {
-                    println!("    {flag:<30} {desc}");
+                for &flag in values {
+                    println!("    {flag:<30} {}", flags[flag]);
                 }
             } else {
                 println!("    [{group}]");
-                for (value, desc) in values {
-                    println!("      {value:<28} {desc}");
+                for &value in values {
+                    let full = format!("{group}_{value}");
+                    println!("      {value:<28} {}", flags[&full]);
                 }
             }
         }
