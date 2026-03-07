@@ -20,7 +20,7 @@
 use std::env;
 use std::process;
 
-use portage_repo::{ProfileStatus, Repository};
+use portage_repo::{ProfileStatus, Repository, UseExpand};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -116,9 +116,8 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
         }
     };
 
-    // Build the prefix table once from the repository's USE_EXPAND groups.
-    // Sorted longest-first so "cpu_flags_x86" is matched before "cpu_flags".
-    let prefixes = build_prefixes(repo);
+    // Build the grouper once from the repository's USE_EXPAND groups.
+    let expand = repo.use_expand().unwrap_or_default();
 
     println!("Profile:    {profile_path}");
     println!("Deprecated: {}", stack.is_deprecated());
@@ -132,10 +131,10 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
     println!();
 
     // ── use.force / use.mask ──────────────────────────────────────────────
-    print_use_set("use.force", stack.use_force(), &prefixes);
-    print_use_set("use.mask", stack.use_mask(), &prefixes);
-    print_use_set("use.stable.force", stack.use_stable_force(), &prefixes);
-    print_use_set("use.stable.mask", stack.use_stable_mask(), &prefixes);
+    print_use_set("use.force", stack.use_force(), &expand);
+    print_use_set("use.mask", stack.use_mask(), &expand);
+    print_use_set("use.stable.force", stack.use_stable_force(), &expand);
+    print_use_set("use.stable.mask", stack.use_stable_mask(), &expand);
 
     // ── System packages ───────────────────────────────────────────────────
     if let Ok(pkgs) = stack.packages() {
@@ -181,10 +180,10 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
                 .collect();
             // For resolved flags prefer the profile's own $USE_EXPAND, which
             // may include groups not present in profiles/desc/*.desc.
-            let shell_prefixes = build_prefixes_from_var(
+            let shell_expand = UseExpand::from_var(
                 &shell.get_var("USE_EXPAND").unwrap_or_default(),
             );
-            let groups = group_flags(&flags, &shell_prefixes);
+            let groups = shell_expand.group(flags.iter().map(String::as_str));
             println!("  ({} flags across {} groups)", flags.len(), groups.len());
             println!();
             print_grouped(&groups);
@@ -195,62 +194,17 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Build the prefix table from `profiles/desc/*.desc` (no shell needed).
-fn build_prefixes(repo: &Repository) -> Vec<String> {
-    let mut names = repo.use_expand_names().unwrap_or_default();
-    // Lowercase and sort longest-first so longer prefixes match before shorter ones.
-    names.iter_mut().for_each(|n| n.make_ascii_lowercase());
-    names.sort_by(|a, b| b.len().cmp(&a.len()));
-    names
-}
-
-/// Build the prefix table from a space-separated `$USE_EXPAND` string.
-fn build_prefixes_from_var(var: &str) -> Vec<String> {
-    let mut names: Vec<String> = var
-        .split_whitespace()
-        .map(|g| g.to_lowercase())
-        .collect();
-    names.sort_by(|a, b| b.len().cmp(&a.len()));
-    names
-}
-
-/// Bucket `flags` into a `BTreeMap<group, values>` using the prefix table.
-///
-/// Each flag is stripped of its `group_` prefix; flags with no matching group
-/// go into `"global"`.
-fn group_flags(
-    flags: &[String],
-    prefixes: &[String],
-) -> std::collections::BTreeMap<String, Vec<String>> {
-    let mut groups: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for flag in flags {
-        let bucket = prefixes
-            .iter()
-            .find(|prefix| flag.starts_with(format!("{prefix}_").as_str()))
-            .map(String::as_str)
-            .unwrap_or("global");
-        let value = if bucket == "global" {
-            flag.clone()
-        } else {
-            flag[bucket.len() + 1..].to_string()
-        };
-        groups.entry(bucket.to_string()).or_default().push(value);
-    }
-    groups
-}
-
 /// Print a USE flag set (force/mask/etc.) grouped by USE_EXPAND, if non-empty.
 fn print_use_set(
     name: &str,
     result: portage_repo::Result<Vec<String>>,
-    prefixes: &[String],
+    expand: &UseExpand,
 ) {
     let Ok(flags) = result else { return };
     if flags.is_empty() {
         return;
     }
-    let groups = group_flags(&flags, prefixes);
+    let groups = expand.group(flags.iter().map(String::as_str));
     println!("=== {name} ({} flags) ===", flags.len());
     print_grouped(&groups);
 }

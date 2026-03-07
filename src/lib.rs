@@ -46,6 +46,7 @@ mod pms_builtins;
 mod profile;
 mod repository;
 mod shell;
+mod use_expand;
 mod util;
 mod ver_funcs;
 
@@ -59,3 +60,4 @@ pub use pkgmetadata::PkgMetadata;
 pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
 pub use repository::{ProfileUpdate, Repository};
 pub use shell::EbuildShell;
+pub use use_expand::UseExpand;

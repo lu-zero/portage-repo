@@ -34,6 +34,7 @@ use crate::error::{Error, Result};
 use crate::layout::LayoutConf;
 use crate::profile::{Profile, ProfileDesc, ProfileStack};
 use crate::shell::EbuildShell;
+use crate::use_expand::UseExpand;
 use crate::util;
 
 /// A Gentoo ebuild repository.
@@ -220,6 +221,16 @@ impl Repository {
             .into_iter()
             .map(|l| Dep::parse(&l).map_err(Into::into))
             .collect()
+    }
+
+    /// Build a [`UseExpand`] grouper from this repository's `profiles/desc/` names.
+    ///
+    /// This is a convenience wrapper around [`use_expand_names`] that constructs
+    /// the grouper ready for [`UseExpand::group`] calls.
+    ///
+    /// [`use_expand_names`]: Repository::use_expand_names
+    pub fn use_expand(&self) -> Result<UseExpand> {
+        Ok(UseExpand::new(self.use_expand_names()?))
     }
 
     /// List available USE_EXPAND variable names from `profiles/desc/`.
