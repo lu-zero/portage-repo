@@ -96,11 +96,28 @@ fn main() {
         }
     }
 
+    let expand = repo.use_expand().unwrap_or_default();
+
     let total_pkg_flags: usize = pkg_flags.values().map(|m| m.len()).sum();
     for (cpn, flags) in &pkg_flags {
         println!("  [{cpn}]");
+        // Group flags by USE_EXPAND prefix; truly global flags are shown flat.
+        let mut groups: BTreeMap<&str, Vec<(&str, &str)>> = BTreeMap::new();
         for (flag, desc) in flags {
-            println!("    {flag:<30} {desc}");
+            let (group, value) = expand.split(flag);
+            groups.entry(group).or_default().push((value, desc.as_str()));
+        }
+        for (group, values) in &groups {
+            if *group == "global" {
+                for (flag, desc) in values {
+                    println!("    {flag:<30} {desc}");
+                }
+            } else {
+                println!("    [{group}]");
+                for (value, desc) in values {
+                    println!("      {value:<28} {desc}");
+                }
+            }
         }
     }
     if xml_errors > 0 {
