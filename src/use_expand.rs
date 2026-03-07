@@ -57,13 +57,13 @@ impl UseExpand {
     /// Flags with no matching prefix are placed in the `"global"` group.
     ///
     /// Values within each group are **not** sorted — the caller decides order.
-    pub fn group(
+    /// Values are slices into the original flag strings — no allocation per flag.
+    pub fn group<'f>(
         &self,
-        flags: impl IntoIterator<Item = impl AsRef<str>>,
-    ) -> BTreeMap<String, Vec<String>> {
-        let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        flags: impl IntoIterator<Item = &'f str>,
+    ) -> BTreeMap<String, Vec<&'f str>> {
+        let mut groups: BTreeMap<String, Vec<&'f str>> = BTreeMap::new();
         for flag in flags {
-            let flag = flag.as_ref();
             let (bucket, value) = self.split(flag);
             groups.entry(bucket.to_string()).or_default().push(value);
         }
@@ -75,18 +75,20 @@ impl UseExpand {
         &self.prefixes
     }
 
-    /// Split one flag into `(group, value)`.
+    /// Split one flag into `(group, value)` without allocating.
     ///
-    /// Returns `("global", flag.to_string())` if no prefix matches.
-    pub fn split(&self, flag: &str) -> (&str, String) {
+    /// Both returned slices borrow from their respective inputs:
+    /// `group` from `self.prefixes` (or `"global"`), `value` from `flag`.
+    /// Returns `("global", flag)` if no prefix matches.
+    pub fn split<'s, 'f>(&'s self, flag: &'f str) -> (&'s str, &'f str) {
         for prefix in &self.prefixes {
             if let Some(rest) = flag.strip_prefix(prefix.as_str())
                 && let Some(value) = rest.strip_prefix('_')
             {
-                return (prefix.as_str(), value.to_string());
+                return (prefix.as_str(), value);
             }
         }
-        ("global", flag.to_string())
+        ("global", flag)
     }
 }
 
