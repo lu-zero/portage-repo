@@ -1,13 +1,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
+use gentoo_core::{Arch, ArchInterner, GlobalArchInterner};
 use jwalk::WalkDir;
-use lasso::ThreadedRodeo;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
-
-use crate::arch::Arch;
 
 /// A single package-move or slot-move entry from `profiles/updates/`.
 ///
@@ -48,20 +45,19 @@ use crate::util;
 ///
 /// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
-pub struct Repository {
+pub struct Repository<I: ArchInterner = GlobalArchInterner> {
     path: PathBuf,
     layout: LayoutConf,
     name: String,
-    arch_interner: Arc<ThreadedRodeo>,
-    arch_cache: Vec<Arch>,
+    arch_interner: I,
+    arch_cache: Vec<Arch<I::Key>>,
 }
 
-impl Repository {
-    /// Open an ebuild repository at the given path.
+impl<I: ArchInterner + Default> Repository<I> {
+    /// Open an ebuild repository at the given path using a custom [`ArchInterner`].
     ///
-    /// Reads `metadata/layout.conf` and `profiles/repo_name` eagerly.
-    /// Returns an error if the directory lacks a valid `layout.conf`.
-    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+    /// Prefer [`Repository::open`] for the common case with the global interner.
+    pub fn open_with_interner(path: impl Into<PathBuf>) -> Result<Self> {
         let path = path.into();
         if !path.is_dir() {
             return Err(Error::InvalidRepository(path));
@@ -76,11 +72,11 @@ impl Repository {
                     .unwrap_or_default()
             });
 
-        let arch_interner = Arc::new(ThreadedRodeo::default());
-        let arch_cache = util::read_lines(&path.join("profiles").join("arch.list"))
+        let arch_interner = I::default();
+        let arch_cache: Vec<Arch<I::Key>> = util::read_lines(&path.join("profiles").join("arch.list"))
             .unwrap_or_default()
             .into_iter()
-            .map(|s| Arch::intern(&s, &arch_interner))
+            .map(|s| Arch::intern_with(&s, &arch_interner))
             .collect();
 
         Ok(Repository { path, layout, name, arch_interner, arch_cache })
@@ -389,20 +385,20 @@ impl Repository {
     ///
     /// Populated eagerly at `open()`. See
     /// [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-    pub fn arch_list(&self) -> &[Arch] {
+    pub fn arch_list(&self) -> &[Arch<I::Key>] {
         &self.arch_cache
     }
 
     /// Resolve an [`Arch`] to its Gentoo keyword string.
-    pub fn arch_keyword(&self, arch: &Arch) -> &str {
-        arch.as_keyword(&self.arch_interner)
+    pub fn arch_keyword(&self, arch: &Arch<I::Key>) -> &str {
+        arch.resolve_with(&self.arch_interner)
     }
 
     /// Extract the CPU architecture from a GNU CHOST triple.
     ///
     /// Returns `None` only when `chost` is empty.
-    pub fn arch_from_chost(&self, chost: &str) -> Option<Arch> {
-        Arch::from_chost(chost, &self.arch_interner)
+    pub fn arch_from_chost(&self, chost: &str) -> Option<Arch<I::Key>> {
+        Arch::from_chost_with(chost, &self.arch_interner)
     }
 
 
@@ -467,7 +463,7 @@ impl Repository {
     ///
     /// See [PMS 4.7](https://projects.gentoo.org/pms/9/pms.html#tree-layout)
     /// and [PMS 10.1](https://projects.gentoo.org/pms/9/pms.html#eclasses).
-    pub async fn shell_with_masters(&self, masters: &[&Repository]) -> Result<EbuildShell> {
+    pub async fn shell_with_masters(&self, masters: &[&Repository<I>]) -> Result<EbuildShell> {
         let mut shell = EbuildShell::new(self).await?;
         // Prepend master eclass dirs in reverse order so the first master
         // ends up at position 0 (highest priority among masters).
@@ -514,6 +510,58 @@ impl Repository {
     /// `repos_dir/<master_name>`, and its own masters are resolved
     /// recursively (depth-first). Returns the opened repository and
     /// the flattened list of master repositories in search order.
+    pub fn open_with_masters_and_interner(
+        path: impl Into<PathBuf>,
+        repos_dir: impl AsRef<Path>,
+    ) -> Result<(Self, Vec<Repository<I>>)> {
+        let repo = Self::open_with_interner(path)?;
+        let mut masters: Vec<Repository<I>> = Vec::new();
+        let mut seen = HashSet::new();
+        seen.insert(repo.name().to_string());
+        Self::resolve_masters(&repo, repos_dir.as_ref(), &mut masters, &mut seen)?;
+        Ok((repo, masters))
+    }
+
+    /// Recursively resolve master repositories (depth-first).
+    fn resolve_masters(
+        repo: &Repository<I>,
+        repos_dir: &Path,
+        out: &mut Vec<Repository<I>>,
+        seen: &mut HashSet<String>,
+    ) -> Result<()> {
+        for master_name in &repo.layout().masters {
+            if !seen.insert(master_name.clone()) {
+                continue; // already resolved or cycle
+            }
+            let master_path = repos_dir.join(master_name);
+            let master = Self::open_with_interner(master_path)?;
+            // Resolve the master's own masters first (depth-first).
+            Self::resolve_masters(&master, repos_dir, out, seen)?;
+            out.push(master);
+        }
+        Ok(())
+    }
+}
+
+/// Convenience methods using the global [`GlobalArchInterner`].
+///
+/// These are the main entry points for most users. Using a concrete `impl`
+/// (rather than generic `impl<I>`) means callers need no type annotations.
+impl Repository<GlobalArchInterner> {
+    /// Open an ebuild repository at the given path.
+    ///
+    /// Reads `metadata/layout.conf` and `profiles/repo_name` eagerly.
+    /// Returns an error if the directory lacks a valid `layout.conf`.
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
+        Self::open_with_interner(path)
+    }
+
+    /// Open a repository, resolving its master repositories from `repos_dir`.
+    ///
+    /// Each master listed in `layout.conf` is opened from
+    /// `repos_dir/<master_name>`, and its own masters are resolved
+    /// recursively (depth-first). Returns the opened repository and
+    /// the flattened list of master repositories in search order.
     ///
     /// # Example
     ///
@@ -529,32 +577,7 @@ impl Repository {
         path: impl Into<PathBuf>,
         repos_dir: impl AsRef<Path>,
     ) -> Result<(Self, Vec<Repository>)> {
-        let repo = Self::open(path)?;
-        let mut masters = Vec::new();
-        let mut seen = HashSet::new();
-        seen.insert(repo.name().to_string());
-        Self::resolve_masters(&repo, repos_dir.as_ref(), &mut masters, &mut seen)?;
-        Ok((repo, masters))
-    }
-
-    /// Recursively resolve master repositories (depth-first).
-    fn resolve_masters(
-        repo: &Repository,
-        repos_dir: &Path,
-        out: &mut Vec<Repository>,
-        seen: &mut HashSet<String>,
-    ) -> Result<()> {
-        for master_name in &repo.layout().masters {
-            if !seen.insert(master_name.clone()) {
-                continue; // already resolved or cycle
-            }
-            let master_path = repos_dir.join(master_name);
-            let master = Self::open(master_path)?;
-            // Resolve the master's own masters first (depth-first).
-            Self::resolve_masters(&master, repos_dir, out, seen)?;
-            out.push(master);
-        }
-        Ok(())
+        Self::open_with_masters_and_interner(path, repos_dir)
     }
 }
 

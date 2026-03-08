@@ -12,7 +12,6 @@ categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
 gentoo-core = { path = "../gentoo-core" }
-lasso = { version = "0.7", features = ["multi-threaded"] }
 portage-atom = "0.3.1"
 portage-metadata = "0.2.1"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
