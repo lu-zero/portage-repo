@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use itertools::Itertools as _;
 
@@ -14,10 +14,10 @@ use crate::error::{Error, Result};
 /// See also [PMS Appendix A](https://projects.gentoo.org/pms/9/pms.html#metadata-xml).
 #[derive(Debug, Clone, Default)]
 pub struct PkgMetadata {
-    /// USE flag descriptions, keyed by flag name.
+    /// USE flag descriptions, keyed by flag name, sorted alphabetically.
     ///
     /// Inner XML elements (e.g. `<pkg>`, `<b>`) are flattened to plain text.
-    pub use_flags: HashMap<String, String>,
+    use_flags: BTreeMap<String, String>,
 }
 
 impl PkgMetadata {
@@ -30,7 +30,7 @@ impl PkgMetadata {
         let doc = roxmltree::Document::parse_with_options(xml, opts)
             .map_err(|e| Error::InvalidMetadataXml(e.to_string()))?;
         let root = doc.root_element();
-        let mut use_flags = HashMap::new();
+        let mut use_flags = BTreeMap::new();
 
         for use_node in root.children().filter(|n| n.has_tag_name("use")) {
             for flag_node in use_node.children().filter(|n| n.has_tag_name("flag")) {
@@ -41,6 +41,18 @@ impl PkgMetadata {
         }
 
         Ok(PkgMetadata { use_flags })
+    }
+
+    /// USE flag descriptions keyed by flag name, in alphabetical order.
+    ///
+    /// Inner XML elements (e.g. `<pkg>`, `<b>`) are flattened to plain text.
+    pub fn use_flags(&self) -> &BTreeMap<String, String> {
+        &self.use_flags
+    }
+
+    /// Consume `self` and return the USE flag map.
+    pub fn into_use_flags(self) -> BTreeMap<String, String> {
+        self.use_flags
     }
 }
 

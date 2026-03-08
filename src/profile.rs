@@ -37,6 +37,17 @@ impl ProfileStatus {
     }
 }
 
+impl std::fmt::Display for ProfileStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ProfileStatus::Stable => f.write_str("stable"),
+            ProfileStatus::Dev => f.write_str("dev"),
+            ProfileStatus::Exp => f.write_str("exp"),
+            ProfileStatus::Other(s) => f.write_str(s),
+        }
+    }
+}
+
 /// A profile entry from `profiles/profiles.desc`.
 ///
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).

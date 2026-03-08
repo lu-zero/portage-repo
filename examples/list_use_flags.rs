@@ -93,9 +93,8 @@ fn main() {
                 continue;
             }
             match pkg.metadata_xml() {
-                Ok(Some(meta)) if !meta.use_flags.is_empty() => {
-                    let sorted: BTreeMap<_, _> = meta.use_flags.into_iter().collect();
-                    pkg_flags.insert(pkg.cpn().to_string(), sorted);
+                Ok(Some(meta)) if !meta.use_flags().is_empty() => {
+                    pkg_flags.insert(pkg.cpn().to_string(), meta.into_use_flags());
                 }
                 Ok(_) => {}
                 Err(e) => {

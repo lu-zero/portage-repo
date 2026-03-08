@@ -20,7 +20,7 @@
 use std::env;
 use std::process;
 
-use portage_repo::{ProfileStatus, Repository, UseExpand};
+use portage_repo::{Repository, UseExpand};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -73,12 +73,7 @@ async fn main() {
             current_arch = desc.arch.clone();
         }
 
-        let status = match &desc.status {
-            ProfileStatus::Stable => "stable",
-            ProfileStatus::Dev => "dev",
-            ProfileStatus::Exp => "exp",
-            ProfileStatus::Other(s) => s.as_str(),
-        };
+        let status = desc.status.to_string();
 
         // Resolve the stack to get depth and basic stats (no shell needed).
         match repo.profile_stack(&desc.path) {

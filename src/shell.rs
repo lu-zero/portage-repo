@@ -275,7 +275,7 @@ impl EbuildShell {
 
         // Absolute path to the ebuild file (PMS 11.1)
         let ebuild_path =
-            std::fs::canonicalize(ebuild.path()).unwrap_or_else(|_| ebuild.path().clone());
+            std::fs::canonicalize(ebuild.path()).unwrap_or_else(|_| ebuild.path().to_path_buf());
         self.set_var("EBUILD", &ebuild_path.to_string_lossy());
 
         // Build-directory variables (PMS 11.1)

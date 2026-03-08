@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use portage_atom::{Cpn, Cpv};
 
@@ -43,7 +43,7 @@ impl Package {
     }
 
     /// Absolute path to the package directory.
-    pub fn path(&self) -> &PathBuf {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use portage_atom::Cpv;
@@ -58,7 +58,7 @@ impl Ebuild {
     }
 
     /// Absolute path to the `.ebuild` file.
-    pub fn path(&self) -> &PathBuf {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
