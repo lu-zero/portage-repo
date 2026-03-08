@@ -57,11 +57,12 @@ async fn main() {
     // Validate the arch filter against the known arch list.
     if let Some(arch) = filter {
         if !arch.contains('/') {
-            let known = repo.arch_list().unwrap_or_default();
-            if !known.is_empty() && !known.iter().any(|a| a == arch) {
+            let known = repo.arch_list();
+            if !known.is_empty() && !known.iter().any(|a| repo.arch_keyword(a) == arch) {
+                let keywords: Vec<&str> = known.iter().map(|a| repo.arch_keyword(a)).collect();
                 eprintln!(
                     "Unknown arch {arch:?}. Known arches: {}",
-                    known.join(", ")
+                    keywords.join(", ")
                 );
                 process::exit(1);
             }

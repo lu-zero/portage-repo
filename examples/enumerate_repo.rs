@@ -69,7 +69,9 @@ fn main() {
     }
 
     // Show supported architectures
-    if let Ok(arches) = repo.arch_list() {
-        println!("Arches:   {} ({})", arches.len(), arches.join(" "));
+    let arches = repo.arch_list();
+    if !arches.is_empty() {
+        let keywords: Vec<&str> = arches.iter().map(|a| repo.arch_keyword(a)).collect();
+        println!("Arches:   {} ({})", arches.len(), keywords.join(" "));
     }
 }

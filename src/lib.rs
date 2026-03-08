@@ -33,6 +33,7 @@
 //! > thoroughly audited. It may contain bugs, incomplete PMS coverage, or
 //! > surprising edge-case behaviour. Use at your own risk.
 
+mod arch;
 mod builtins;
 mod category;
 mod ebuild;
@@ -50,6 +51,7 @@ mod use_expand;
 mod util;
 mod ver_funcs;
 
+pub use arch::{Arch, ExoticKey};
 pub use category::Category;
 pub use ebuild::Ebuild;
 pub use error::{Error, Result};

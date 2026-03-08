@@ -1,9 +1,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use jwalk::WalkDir;
+use lasso::ThreadedRodeo;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
+
+use crate::arch::Arch;
 
 /// A single package-move or slot-move entry from `profiles/updates/`.
 ///
@@ -48,6 +52,8 @@ pub struct Repository {
     path: PathBuf,
     layout: LayoutConf,
     name: String,
+    arch_interner: Arc<ThreadedRodeo>,
+    arch_cache: Vec<Arch>,
 }
 
 impl Repository {
@@ -70,7 +76,14 @@ impl Repository {
                     .unwrap_or_default()
             });
 
-        Ok(Repository { path, layout, name })
+        let arch_interner = Arc::new(ThreadedRodeo::default());
+        let arch_cache = util::read_lines(&path.join("profiles").join("arch.list"))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| Arch::intern(&s, &arch_interner))
+            .collect();
+
+        Ok(Repository { path, layout, name, arch_interner, arch_cache })
     }
 
     /// Absolute path to the repository root.
@@ -372,10 +385,26 @@ impl Repository {
         list_dir_names(&self.path.join("licenses"))
     }
 
-    /// List architecture keywords from `profiles/arch.list`.
-    pub fn arch_list(&self) -> Result<Vec<String>> {
-        util::read_lines(&self.path.join("profiles").join("arch.list"))
+    /// Architectures declared in `profiles/arch.list` (typed).
+    ///
+    /// Populated eagerly at `open()`. See
+    /// [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub fn arch_list(&self) -> &[Arch] {
+        &self.arch_cache
     }
+
+    /// Resolve an [`Arch`] to its Gentoo keyword string.
+    pub fn arch_keyword(&self, arch: &Arch) -> &str {
+        arch.as_keyword(&self.arch_interner)
+    }
+
+    /// Extract the CPU architecture from a GNU CHOST triple.
+    ///
+    /// Returns `None` only when `chost` is empty.
+    pub fn arch_from_chost(&self, chost: &str) -> Option<Arch> {
+        Arch::from_chost(chost, &self.arch_interner)
+    }
+
 
     /// Parse global USE flag descriptions from `profiles/use.desc`.
     ///
