@@ -191,11 +191,11 @@ impl<I: ArchInterner + Default> Repository<I> {
     /// Parse `profiles/profiles.desc` to get available profile descriptions.
     ///
     /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
-    pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc>> {
+    pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc<I::Key>>> {
         let lines = util::read_lines(&self.path.join("profiles").join("profiles.desc"))?;
         let mut descs = Vec::new();
         for line in lines {
-            descs.push(ProfileDesc::parse(&line)?);
+            descs.push(ProfileDesc::parse_with(&line, &self.arch_interner)?);
         }
         Ok(descs)
     }

@@ -1,6 +1,8 @@
 use std::collections::HashSet;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
+use gentoo_core::{Arch, ArchInterner, GlobalArchInterner};
 use portage_atom::Dep;
 use portage_metadata::Eapi;
 
@@ -50,22 +52,29 @@ impl std::fmt::Display for ProfileStatus {
 
 /// A profile entry from `profiles/profiles.desc`.
 ///
+/// `K` is the interner key type used by [`Arch`]; defaults to `u32`
+/// (the [`GlobalArchInterner`] key), which supports `Display` and
+/// `PartialEq<str>` comparisons directly.
+///
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone)]
-pub struct ProfileDesc {
-    /// Architecture keyword (e.g. `amd64`).
-    arch: String,
+pub struct ProfileDesc<K = u32>
+where
+    K: Copy + Eq + Hash,
+{
+    /// Typed architecture keyword.
+    arch: Arch<K>,
     /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
     path: String,
     /// Stability status.
     status: ProfileStatus,
 }
 
-impl ProfileDesc {
-    /// Parse a single line from `profiles.desc`.
+impl<K: Copy + Eq + Hash> ProfileDesc<K> {
+    /// Parse a single line from `profiles.desc` using a custom interner.
     ///
     /// Format: `arch path status`
-    pub fn parse(line: &str) -> Result<Self> {
+    pub fn parse_with(line: &str, interner: &impl ArchInterner<Key = K>) -> Result<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
             return Err(Error::InvalidProfile(format!(
@@ -73,15 +82,15 @@ impl ProfileDesc {
             )));
         }
         Ok(ProfileDesc {
-            arch: parts[0].to_string(),
+            arch: Arch::intern_with(parts[0], interner),
             path: parts[1].to_string(),
             status: ProfileStatus::parse(parts[2]),
         })
     }
 
-    /// Architecture keyword (e.g. `amd64`).
-    pub fn arch(&self) -> &str {
-        &self.arch
+    /// Typed architecture keyword.
+    pub fn arch(&self) -> Arch<K> {
+        self.arch
     }
 
     /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
@@ -92,6 +101,15 @@ impl ProfileDesc {
     /// Stability status.
     pub fn status(&self) -> &ProfileStatus {
         &self.status
+    }
+}
+
+impl ProfileDesc<u32> {
+    /// Parse a single line from `profiles.desc` using the global interner.
+    ///
+    /// Format: `arch path status`
+    pub fn parse(line: &str) -> Result<Self> {
+        Self::parse_with(line, &GlobalArchInterner)
     }
 }
 
