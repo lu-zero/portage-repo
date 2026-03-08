@@ -100,8 +100,7 @@ mod tests {
     #[test]
     fn groups_flags_by_prefix() {
         let expand = UseExpand::new(["cpu_flags_x86", "video_cards"]);
-        let groups =
-            expand.group(["cpu_flags_x86_sse2", "video_cards_intel", "wayland"]);
+        let groups = expand.group(["cpu_flags_x86_sse2", "video_cards_intel", "wayland"]);
         assert_eq!(groups["cpu_flags_x86"], ["sse2"]);
         assert_eq!(groups["video_cards"], ["intel"]);
         assert_eq!(groups["global"], ["wayland"]);

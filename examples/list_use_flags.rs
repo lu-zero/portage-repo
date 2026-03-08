@@ -127,5 +127,8 @@ fn main() {
     if xml_errors > 0 {
         eprintln!("  ({xml_errors} metadata.xml parse errors)");
     }
-    println!("  ({} packages, {total_pkg_flags} per-package flags)", pkg_flags.len());
+    println!(
+        "  ({} packages, {total_pkg_flags} per-package flags)",
+        pkg_flags.len()
+    );
 }

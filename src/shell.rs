@@ -14,8 +14,8 @@ use crate::error::{Error, Result};
 use crate::inherit;
 use crate::pms_builtins;
 use crate::repository::Repository;
-use gentoo_core::ArchInterner;
 use crate::ver_funcs;
+use gentoo_core::Interner;
 
 /// Metadata variables extracted from a sourced ebuild.
 ///
@@ -87,7 +87,7 @@ impl EbuildShell {
     /// Registers Portage-specific bash functions (`inherit`, `die`,
     /// `EXPORT_FUNCTIONS`, etc.) and sets up eclass directories from
     /// the repository's `eclass/` directory.
-    pub async fn new<I: ArchInterner + Default>(repo: &Repository<I>) -> Result<Self> {
+    pub async fn new<I: Interner + Default>(repo: &Repository<I>) -> Result<Self> {
         let mut shell = Shell::builder()
             .default_builtins(brush_builtins::BuiltinSet::BashMode)
             .do_not_inherit_env(true)

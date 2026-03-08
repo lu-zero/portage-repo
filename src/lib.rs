@@ -51,9 +51,11 @@ mod util;
 mod ver_funcs;
 
 pub use category::Category;
-pub use gentoo_core::{Arch, ArchInterner, ExoticKey, GlobalArchInterner, KnownArch};
 pub use ebuild::Ebuild;
 pub use error::{Error, Result};
+pub use gentoo_core::{
+    Arch, DefaultInterner, ExoticKey, GlobalInterner, Interner, KnownArch, NoInterner,
+};
 pub use layout::LayoutConf;
 pub use manifest::{Manifest, ManifestEntry};
 pub use package::Package;

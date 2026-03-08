@@ -129,6 +129,9 @@ mod tests {
     #[test]
     fn parse_invalid_xml_returns_error() {
         let result = PkgMetadata::parse("<not valid xml");
-        assert!(matches!(result, Err(crate::error::Error::InvalidMetadataXml(_))));
+        assert!(matches!(
+            result,
+            Err(crate::error::Error::InvalidMetadataXml(_))
+        ));
     }
 }

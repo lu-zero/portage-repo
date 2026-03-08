@@ -83,9 +83,10 @@ async fn main() {
     // Group by arch for display.
     let mut current_arch = String::new();
     for desc in &profiles {
-        if desc.arch() != current_arch {
-            println!("\n[{}]", desc.arch());
-            current_arch = desc.arch().to_string();
+        let arch_str = desc.arch().to_string();
+        if arch_str != current_arch {
+            println!("\n[{}]", arch_str);
+            current_arch = arch_str;
         }
 
         let status = desc.status().to_string();
@@ -94,7 +95,11 @@ async fn main() {
         match repo.profile_stack(desc.path()) {
             Ok(stack) => {
                 let depth = stack.profiles().len();
-                let deprecated = if stack.is_deprecated() { " [DEPRECATED]" } else { "" };
+                let deprecated = if stack.is_deprecated() {
+                    " [DEPRECATED]"
+                } else {
+                    ""
+                };
                 let force = stack.use_force().map(|v| v.len()).unwrap_or(0);
                 let mask = stack.use_mask().map(|v| v.len()).unwrap_or(0);
                 let pkg_mask = stack.package_mask().map(|v| v.len()).unwrap_or(0);
@@ -105,7 +110,8 @@ async fn main() {
                 println!(
                     "  {:<45} {:6}  depth={depth}  force={force}  mask={mask}  \
                      pkg_mask={pkg_mask}  sys={sys_pkgs}{deprecated}",
-                    desc.path(), status,
+                    desc.path(),
+                    status,
                 );
             }
             Err(e) => {
@@ -134,7 +140,10 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
     println!();
 
     // ── Inheritance chain ─────────────────────────────────────────────────
-    println!("=== Inheritance chain ({} profiles) ===", stack.profiles().len());
+    println!(
+        "=== Inheritance chain ({} profiles) ===",
+        stack.profiles().len()
+    );
     for (i, p) in stack.profiles().iter().enumerate() {
         println!("  [{i}] {}", p.path().display());
     }
@@ -190,9 +199,8 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
                 .collect();
             // For resolved flags prefer the profile's own $USE_EXPAND, which
             // may include groups not present in profiles/desc/*.desc.
-            let shell_expand = UseExpand::from_var(
-                &shell.get_var("USE_EXPAND").unwrap_or_default(),
-            );
+            let shell_expand =
+                UseExpand::from_var(&shell.get_var("USE_EXPAND").unwrap_or_default());
             let groups = shell_expand.group(flags.iter().map(String::as_str));
             println!("  ({} flags across {} groups)", flags.len(), groups.len());
             println!();
@@ -205,11 +213,7 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Print a USE flag set (force/mask/etc.) grouped by USE_EXPAND, if non-empty.
-fn print_use_set(
-    name: &str,
-    result: portage_repo::Result<Vec<String>>,
-    expand: &UseExpand,
-) {
+fn print_use_set(name: &str, result: portage_repo::Result<Vec<String>>, expand: &UseExpand) {
     let Ok(flags) = result else { return };
     if flags.is_empty() {
         return;

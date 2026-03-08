@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use gentoo_core::{Arch, ArchInterner, GlobalArchInterner};
+use gentoo_core::{Arch, GlobalInterner, Interner};
 use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
@@ -45,16 +45,16 @@ use crate::util;
 ///
 /// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
-pub struct Repository<I: ArchInterner = GlobalArchInterner> {
+pub struct Repository<I: Interner = GlobalInterner> {
     path: PathBuf,
     layout: LayoutConf,
     name: String,
     arch_interner: I,
-    arch_cache: Vec<Arch<I::Key>>,
+    arch_cache: Vec<Arch<I>>,
 }
 
-impl<I: ArchInterner + Default> Repository<I> {
-    /// Open an ebuild repository at the given path using a custom [`ArchInterner`].
+impl<I: Interner + Default> Repository<I> {
+    /// Open an ebuild repository at the given path using a custom [`Interner`].
     ///
     /// Prefer [`Repository::open`] for the common case with the global interner.
     pub fn open_with_interner(path: impl Into<PathBuf>) -> Result<Self> {
@@ -73,13 +73,19 @@ impl<I: ArchInterner + Default> Repository<I> {
             });
 
         let arch_interner = I::default();
-        let arch_cache: Vec<Arch<I::Key>> = util::read_lines(&path.join("profiles").join("arch.list"))
+        let arch_cache: Vec<Arch<I>> = util::read_lines(&path.join("profiles").join("arch.list"))
             .unwrap_or_default()
             .into_iter()
             .map(|s| Arch::intern_with(&s, &arch_interner))
             .collect();
 
-        Ok(Repository { path, layout, name, arch_interner, arch_cache })
+        Ok(Repository {
+            path,
+            layout,
+            name,
+            arch_interner,
+            arch_cache,
+        })
     }
 
     /// Absolute path to the repository root.
@@ -191,7 +197,7 @@ impl<I: ArchInterner + Default> Repository<I> {
     /// Parse `profiles/profiles.desc` to get available profile descriptions.
     ///
     /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
-    pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc<I::Key>>> {
+    pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc<I>>> {
         let lines = util::read_lines(&self.path.join("profiles").join("profiles.desc"))?;
         let mut descs = Vec::new();
         for line in lines {
@@ -385,22 +391,21 @@ impl<I: ArchInterner + Default> Repository<I> {
     ///
     /// Populated eagerly at `open()`. See
     /// [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-    pub fn arch_list(&self) -> &[Arch<I::Key>] {
+    pub fn arch_list(&self) -> &[Arch<I>] {
         &self.arch_cache
     }
 
     /// Resolve an [`Arch`] to its Gentoo keyword string.
-    pub fn arch_keyword(&self, arch: &Arch<I::Key>) -> &str {
+    pub fn arch_keyword<'a>(&'a self, arch: &'a Arch<I>) -> &'a str {
         arch.resolve_with(&self.arch_interner)
     }
 
     /// Extract the CPU architecture from a GNU CHOST triple.
     ///
     /// Returns `None` only when `chost` is empty.
-    pub fn arch_from_chost(&self, chost: &str) -> Option<Arch<I::Key>> {
+    pub fn arch_from_chost(&self, chost: &str) -> Option<Arch<I>> {
         Arch::from_chost_with(chost, &self.arch_interner)
     }
-
 
     /// Parse global USE flag descriptions from `profiles/use.desc`.
     ///
@@ -543,11 +548,11 @@ impl<I: ArchInterner + Default> Repository<I> {
     }
 }
 
-/// Convenience methods using the global [`GlobalArchInterner`].
+/// Convenience methods using the global [`GlobalInterner`].
 ///
 /// These are the main entry points for most users. Using a concrete `impl`
 /// (rather than generic `impl<I>`) means callers need no type annotations.
-impl Repository<GlobalArchInterner> {
+impl Repository<GlobalInterner> {
     /// Open an ebuild repository at the given path.
     ///
     /// Reads `metadata/layout.conf` and `profiles/repo_name` eagerly.
