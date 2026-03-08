@@ -67,4 +67,9 @@ fn main() {
     if let Ok(licenses) = repo.licenses() {
         println!("Licenses: {}", licenses.len());
     }
+
+    // Show supported architectures
+    if let Ok(arches) = repo.arch_list() {
+        println!("Arches:   {} ({})", arches.len(), arches.join(" "));
+    }
 }
