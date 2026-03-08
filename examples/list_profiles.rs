@@ -57,7 +57,7 @@ async fn main() {
     // Otherwise: list profiles, optionally filtered by arch.
     let profiles: Vec<_> = all_profiles
         .iter()
-        .filter(|p| filter.is_none_or(|arch| p.arch == arch))
+        .filter(|p| filter.is_none_or(|arch| p.arch() == arch))
         .collect();
 
     if profiles.is_empty() {
@@ -68,15 +68,15 @@ async fn main() {
     // Group by arch for display.
     let mut current_arch = String::new();
     for desc in &profiles {
-        if desc.arch != current_arch {
-            println!("\n[{}]", desc.arch);
-            current_arch = desc.arch.clone();
+        if desc.arch() != current_arch {
+            println!("\n[{}]", desc.arch());
+            current_arch = desc.arch().to_string();
         }
 
-        let status = desc.status.to_string();
+        let status = desc.status().to_string();
 
         // Resolve the stack to get depth and basic stats (no shell needed).
-        match repo.profile_stack(&desc.path) {
+        match repo.profile_stack(desc.path()) {
             Ok(stack) => {
                 let depth = stack.profiles().len();
                 let deprecated = if stack.is_deprecated() { " [DEPRECATED]" } else { "" };
@@ -90,11 +90,11 @@ async fn main() {
                 println!(
                     "  {:<45} {:6}  depth={depth}  force={force}  mask={mask}  \
                      pkg_mask={pkg_mask}  sys={sys_pkgs}{deprecated}",
-                    desc.path, status,
+                    desc.path(), status,
                 );
             }
             Err(e) => {
-                println!("  {:<45} {:6}  (stack error: {e})", desc.path, status);
+                println!("  {:<45} {:6}  (stack error: {e})", desc.path(), status);
             }
         }
     }

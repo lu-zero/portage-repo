@@ -54,11 +54,11 @@ impl std::fmt::Display for ProfileStatus {
 #[derive(Debug, Clone)]
 pub struct ProfileDesc {
     /// Architecture keyword (e.g. `amd64`).
-    pub arch: String,
+    arch: String,
     /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
-    pub path: String,
+    path: String,
     /// Stability status.
-    pub status: ProfileStatus,
+    status: ProfileStatus,
 }
 
 impl ProfileDesc {
@@ -77,6 +77,21 @@ impl ProfileDesc {
             path: parts[1].to_string(),
             status: ProfileStatus::parse(parts[2]),
         })
+    }
+
+    /// Architecture keyword (e.g. `amd64`).
+    pub fn arch(&self) -> &str {
+        &self.arch
+    }
+
+    /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Stability status.
+    pub fn status(&self) -> &ProfileStatus {
+        &self.status
     }
 }
 
@@ -624,27 +639,27 @@ mod tests {
     #[test]
     fn parse_profile_desc_line() {
         let desc = ProfileDesc::parse("amd64 default/linux/amd64/23.0 stable").unwrap();
-        assert_eq!(desc.arch, "amd64");
-        assert_eq!(desc.path, "default/linux/amd64/23.0");
-        assert_eq!(desc.status, ProfileStatus::Stable);
+        assert_eq!(desc.arch(), "amd64");
+        assert_eq!(desc.path(), "default/linux/amd64/23.0");
+        assert_eq!(desc.status(), &ProfileStatus::Stable);
     }
 
     #[test]
     fn parse_profile_desc_dev() {
         let desc = ProfileDesc::parse("arm64 default/linux/arm64/23.0 dev").unwrap();
-        assert_eq!(desc.status, ProfileStatus::Dev);
+        assert_eq!(desc.status(), &ProfileStatus::Dev);
     }
 
     #[test]
     fn parse_profile_desc_exp() {
         let desc = ProfileDesc::parse("riscv default/linux/riscv/23.0 exp").unwrap();
-        assert_eq!(desc.status, ProfileStatus::Exp);
+        assert_eq!(desc.status(), &ProfileStatus::Exp);
     }
 
     #[test]
     fn parse_profile_desc_other_status() {
         let desc = ProfileDesc::parse("x86 some/path testing").unwrap();
-        assert_eq!(desc.status, ProfileStatus::Other("testing".to_string()));
+        assert_eq!(desc.status(), &ProfileStatus::Other("testing".to_string()));
     }
 
     #[test]
