@@ -98,17 +98,27 @@ fn token_multiset<'a>(s: &'a str) -> BTreeMap<&'a str, usize> {
     map
 }
 
-/// Return non-structural tokens that appear more than once in `s`.
-fn find_duplicates(s: &str) -> Vec<String> {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for tok in s.split_whitespace() {
+/// Return non-structural tokens whose count in `src` exceeds their count in `ref_val`.
+///
+/// This only reports tokens that we introduced as extra duplicates — tokens that
+/// are already duplicated in the reference (genuine ebuild bugs faithfully reproduced
+/// by portage) are not flagged.
+fn find_extra_duplicates<'a>(ref_val: &'a str, src: &'a str) -> Vec<String> {
+    let mut ref_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for tok in ref_val.split_whitespace() {
         if !STRUCTURAL_TOKENS.contains(&tok) {
-            *counts.entry(tok).or_insert(0) += 1;
+            *ref_counts.entry(tok).or_insert(0) += 1;
         }
     }
-    counts
+    let mut src_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for tok in src.split_whitespace() {
+        if !STRUCTURAL_TOKENS.contains(&tok) {
+            *src_counts.entry(tok).or_insert(0) += 1;
+        }
+    }
+    src_counts
         .into_iter()
-        .filter(|(_, n)| *n > 1)
+        .filter(|(tok, src_n)| *src_n > *ref_counts.get(tok).unwrap_or(&0))
         .map(|(tok, _)| tok.to_string())
         .collect()
 }
@@ -232,10 +242,10 @@ async fn process_ebuild(
         let src_val = src_map.get(key).copied().unwrap_or("");
 
         if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
-            let dups = find_duplicates(src_val);
+            let dups = find_extra_duplicates(ref_val, src_val);
             if !dups.is_empty() {
                 eprintln!(
-                    "\nWARN {cpv_str} {key}: duplicate tokens: {}",
+                    "\nWARN {cpv_str} {key}: extra duplicate tokens (not in reference): {}",
                     dups.join(", ")
                 );
             }

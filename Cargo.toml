@@ -11,9 +11,8 @@ keywords = ["gentoo", "portage", "repository", "pms"]
 categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
-gentoo-core = { path = "../gentoo-core" }
 portage-atom = "0.3.1"
-portage-metadata = "0.2.1"
+portage-metadata = { path = "../portage-metadata" }
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
 clap = { version = "4", features = ["derive"] }
@@ -37,3 +36,8 @@ tokio = { version = "1", features = ["rt", "macros"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = 1
+lto = false

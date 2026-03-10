@@ -2,9 +2,8 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
-use gentoo_core::{Arch, DefaultInterner, Interner};
 use portage_atom::Dep;
-use portage_metadata::Eapi;
+use portage_metadata::{Arch, Eapi};
 
 use crate::error::{Error, Result};
 use crate::shell::EbuildShell;
@@ -52,24 +51,22 @@ impl std::fmt::Display for ProfileStatus {
 
 /// A profile entry from `profiles/profiles.desc`.
 ///
-/// `I` is the [`Interner`] used by [`Arch`]; defaults to [`DefaultInterner`].
-///
 /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
 #[derive(Debug, Clone)]
-pub struct ProfileDesc<I: Interner = DefaultInterner> {
+pub struct ProfileDesc {
     /// Typed architecture keyword.
-    arch: Arch<I>,
+    arch: Arch,
     /// Path relative to `profiles/` (e.g. `default/linux/amd64/23.0`).
     path: String,
     /// Stability status.
     status: ProfileStatus,
 }
 
-impl<I: Interner> ProfileDesc<I> {
-    /// Parse a single line from `profiles.desc` using a custom interner.
+impl ProfileDesc {
+    /// Parse a single line from `profiles.desc`.
     ///
     /// Format: `arch path status`
-    pub fn parse_with(line: &str, interner: &I) -> Result<Self> {
+    pub fn parse(line: &str) -> Result<Self> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() < 3 {
             return Err(Error::InvalidProfile(format!(
@@ -77,14 +74,14 @@ impl<I: Interner> ProfileDesc<I> {
             )));
         }
         Ok(ProfileDesc {
-            arch: Arch::intern_with(parts[0], interner),
+            arch: Arch::intern(parts[0]),
             path: parts[1].to_string(),
             status: ProfileStatus::parse(parts[2]),
         })
     }
 
     /// Typed architecture keyword.
-    pub fn arch(&self) -> &Arch<I> {
+    pub fn arch(&self) -> &Arch {
         &self.arch
     }
 
@@ -96,15 +93,6 @@ impl<I: Interner> ProfileDesc<I> {
     /// Stability status.
     pub fn status(&self) -> &ProfileStatus {
         &self.status
-    }
-}
-
-impl ProfileDesc<DefaultInterner> {
-    /// Parse a single line from `profiles.desc` using the default interner.
-    ///
-    /// Format: `arch path status`
-    pub fn parse(line: &str) -> Result<Self> {
-        Self::parse_with(line, &DefaultInterner::default())
     }
 }
 

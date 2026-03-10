@@ -53,13 +53,13 @@ mod ver_funcs;
 pub use category::Category;
 pub use ebuild::Ebuild;
 pub use error::{Error, Result};
-pub use gentoo_core::{
-    Arch, DefaultInterner, ExoticKey, GlobalInterner, Interner, KnownArch, NoInterner,
-};
 pub use layout::LayoutConf;
 pub use manifest::{Manifest, ManifestEntry};
 pub use package::Package;
 pub use pkgmetadata::PkgMetadata;
+pub use portage_metadata::{arch, interner, Arch, KnownArch};
+pub use portage_metadata::arch::ExoticKey;
+pub use portage_metadata::interner::{DefaultInterner, GlobalInterner, NoInterner, Interner};
 pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
 pub use repository::{ProfileUpdate, Repository};
 pub use shell::EbuildShell;
