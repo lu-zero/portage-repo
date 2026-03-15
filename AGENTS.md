@@ -64,6 +64,31 @@ This codebase was largely AI-generated. Be skeptical of existing code — it may
 contain bugs, incomplete PMS coverage, or surprising edge-case behaviour.
 Do not assume existing patterns are correct; verify against the PMS.
 
+## Benchmarking
+
+### Scripts
+
+- **`benchmark.sh`** — full benchmark driver. Clones the Gentoo mirror if absent
+  (`./gentoo/`), builds release binaries, runs `regen_cache` for correctness
+  verification, then times `regen_only` against the full tree and the `dev-util/*`
+  subset at 1/2/4/8 jobs. Results are written to `/tmp/benchmark_results.csv`.
+
+- **`benchmark_baseline.txt`** — historical timing table (real/user/sys/RSS) for
+  key phases, measured against `dev-libs/*` (≈1,236 ebuilds) on macOS. Update this
+  file whenever a change intentionally affects performance so regressions are visible.
+
+### Running a quick comparison
+
+```bash
+# Build release and time a subset (no full-tree clone needed)
+cargo build --release --example regen_only
+/usr/bin/time -l ./target/release/examples/regen_only ./gentoo 'dev-libs/*' -j 1
+```
+
+Use single-threaded (`-j 1`) for per-change comparisons — variance is tighter than
+the parallel run. Record results in `benchmark_baseline.txt` with the date and a
+short phase description.
+
 ## Debugging parsing issues
 
 If either an ebuild or an eclass do not parse correctly, we may have found a bug in the
