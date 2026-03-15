@@ -49,18 +49,18 @@ async fn main() {
         }
     };
 
-    let category = match repo.category(cpv.category()) {
+    let category = match repo.category(&cpv.cpn.category) {
         Some(c) => c,
         None => {
-            eprintln!("Category {} not found", cpv.category());
+            eprintln!("Category {} not found", cpv.cpn.category);
             process::exit(1);
         }
     };
 
-    let package = match category.package(cpv.package()) {
+    let package = match category.package(&cpv.cpn.package) {
         Some(p) => p,
         None => {
-            eprintln!("Package {} not found in {}", cpv.package(), cpv.category());
+            eprintln!("Package {} not found in {}", cpv.cpn.package, cpv.cpn.category);
             process::exit(1);
         }
     };

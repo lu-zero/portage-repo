@@ -44,12 +44,12 @@ impl Ebuild {
 
     /// The category name.
     pub fn category(&self) -> &str {
-        self.cpv.category()
+        &self.cpv.cpn.category
     }
 
     /// The package name (without version).
     pub fn name(&self) -> &str {
-        self.cpv.package()
+        &self.cpv.cpn.package
     }
 
     /// The version.

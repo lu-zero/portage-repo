@@ -3,7 +3,8 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 use portage_atom::Dep;
-use portage_metadata::{Arch, Eapi};
+use gentoo_core::Arch;
+use portage_metadata::Eapi;
 
 use crate::error::{Error, Result};
 use crate::shell::EbuildShell;

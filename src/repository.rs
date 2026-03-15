@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
-use portage_metadata::{Arch, CacheEntry, Eapi};
+use gentoo_core::Arch;
+use portage_metadata::{CacheEntry, Eapi};
 
 /// A single package-move or slot-move entry from `profiles/updates/`.
 ///
