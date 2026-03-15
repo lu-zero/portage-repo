@@ -140,7 +140,11 @@ fn parse_cache_map(serialized: &str) -> BTreeMap<&str, &str> {
 /// - `dev-lang/*`       — all ebuilds in dev-lang
 /// - `dev-lang/rust-*`  — all rust versions in dev-lang
 /// - `dev-lang/rust-1.88.0` — exact match
+/// - empty string       — match everything
 fn matches_filter(cpv: &str, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true; // No filter means match everything
+    }
     if let Some(prefix) = filter.strip_suffix('*') {
         cpv.starts_with(prefix)
     } else {

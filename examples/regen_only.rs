@@ -7,10 +7,11 @@
 //!   pk repo metadata regen -p <cache-dir> -n -f -j <N> <repo>
 //!
 //! Usage:
-//!   regen_only <repo-path> [-o <cache-dir>] [-j <N>]
+//!   regen_only <repo-path> [filter] [-o <cache-dir>] [-j <N>]
 //!
 //! Examples:
 //!   regen_only gentoo
+//!   regen_only gentoo 'dev-util/*'
 //!   regen_only gentoo -o /tmp/portage-cache -j 12
 
 use std::env;
@@ -22,6 +23,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
+
+/// Check whether a CPV string matches a glob-like filter.
+fn matches_filter(cpv: &str, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true; // No filter means match everything
+    }
+    if let Some(prefix) = filter.strip_suffix('*') {
+        cpv.starts_with(prefix)
+    } else {
+        cpv == filter
+    }
+}
 
 async fn process_ebuild(
     repo: &Repository,
@@ -60,15 +73,17 @@ async fn process_ebuild(
 async fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <repo-path> [-o <cache-dir>] [-j <N>]", args[0]);
+        eprintln!("Usage: {} <repo-path> [filter] [-o <cache-dir>] [-j <N>]", args[0]);
         eprintln!();
         eprintln!("Examples:");
         eprintln!("  {} gentoo", args[0]);
+        eprintln!("  {} gentoo 'dev-util/*'", args[0]);
         eprintln!("  {} gentoo -o /tmp/portage-cache -j 12", args[0]);
         process::exit(2);
     }
 
     let repo_path = &args[1];
+    let mut filter: Option<String> = None;
     let mut out_dir: Option<PathBuf> = None;
     let mut jobs: usize = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -89,7 +104,11 @@ async fn main() {
                     jobs = args[i].parse().unwrap_or(jobs);
                 }
             }
-            _ => {}
+            _ => {
+                if filter.is_none() {
+                    filter = Some(args[i].clone());
+                }
+            }
         }
         i += 1;
     }
@@ -102,7 +121,7 @@ async fn main() {
         }
     };
 
-    let ebuilds = match repo.ebuilds() {
+    let mut ebuilds = match repo.ebuilds() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error listing ebuilds: {e}");
@@ -110,9 +129,18 @@ async fn main() {
         }
     };
 
+    if let Some(ref f) = filter {
+        ebuilds.retain(|eb| matches_filter(&eb.cpv().to_string(), f));
+    }
+
     let total = ebuilds.len();
+    let filter_desc = filter
+        .as_ref()
+        .map(|f| format!(" (filter: {f})"))
+        .unwrap_or_default();
     eprintln!(
-        "Sourcing {total} ebuilds with {jobs} workers{}...",
+        "Sourcing {total} ebuilds with {jobs} workers{}{}...",
+        filter_desc,
         out_dir
             .as_ref()
             .map(|p| format!(", writing to {}", p.display()))
