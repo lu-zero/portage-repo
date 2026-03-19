@@ -12,7 +12,7 @@ categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
 portage-atom = "0.5"
-portage-metadata = { path = "../portage-metadata" }
+portage-metadata = "0.3"
 gentoo-core = "0.4"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
