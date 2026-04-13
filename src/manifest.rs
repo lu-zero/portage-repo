@@ -2,7 +2,7 @@ use std::io::Read;
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use blake2::Digest; // re-exports digest::Digest; valid for sha2 types too
+use sha2::Digest;
 
 /// A single entry in a `Manifest` file (GLEP 74).
 ///
@@ -408,7 +408,7 @@ TIMESTAMP 2024-06-01T00:00:00Z
 
     /// Pre-computed hashes for the 5-byte content b"hello".
     fn hello_hashes() -> Vec<(String, String)> {
-        use blake2::Digest as _; // covers sha2 types (same underlying trait)
+        use sha2::Digest;
         let blake2b = hex::encode(blake2::Blake2b512::digest(b"hello"));
         let sha512 = hex::encode(sha2::Sha512::digest(b"hello"));
         vec![
