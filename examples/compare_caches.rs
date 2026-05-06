@@ -1,0 +1,391 @@
+//! Structural comparison of two md5-dict cache directories.
+//!
+//! Compares every cache entry in two directories (e.g. pkgcraft output vs.
+//! portage-repo output, or either vs. the portage reference) using the
+//! portage-metadata parsers rather than raw text diff.
+//!
+//! Field-level comparison strategy (PMS §7.2, §7.6):
+//!
+//! | Field(s)                                      | Strategy                          |
+//! |-----------------------------------------------|-----------------------------------|
+//! | EAPI, DESCRIPTION, SLOT, HOMEPAGE             | Exact string equality             |
+//! | IUSE, KEYWORDS, DEFINED_PHASES                | Token set equality (order ignored)|
+//! | SRC_URI                                       | Parsed `SrcUriEntry` tree         |
+//! | DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND,   | Token multiset (unordered; `( )`  |
+//! |   LICENSE, RESTRICT, PROPERTIES, REQUIRED_USE | grouping tracked once AllOf lands)|
+//! | _eclasses_                                    | Eclass-name set (checksums differ |
+//! |                                               | by implementation, ignored here)  |
+//!
+//! Non-PMS / implementation fields excluded: INHERIT, INHERITED, _md5_.
+//!
+//! Usage:
+//! ```text
+//! cargo run --release --example compare_caches -- <dir-a> <dir-b> [--jobs N]
+//! ```
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use portage_metadata::SrcUriEntry;
+
+// ── Field classification ──────────────────────────────────────────────────────
+
+/// Fields compared with exact string equality.
+const EXACT_FIELDS: &[&str] = &["EAPI", "DESCRIPTION", "SLOT", "HOMEPAGE"];
+
+/// Fields compared as unordered token sets (duplicates matter: multiset).
+const SET_FIELDS: &[&str] = &["IUSE", "KEYWORDS", "DEFINED_PHASES"];
+
+/// Dep-spec fields compared as token multisets.
+///
+/// Until `portage_atom::DepEntry` gains an `AllOf` variant the parse→serialize
+/// round-trip flattens bare `( )` groups, so we fall back to multiset
+/// comparison (which detects missing/extra atoms but not grouping changes).
+/// See <https://github.com/lu-zero/portage-atom/issues/16>.
+const DEP_FIELDS: &[&str] = &[
+    "DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND",
+    "LICENSE", "RESTRICT", "PROPERTIES", "REQUIRED_USE",
+];
+
+/// Implementation / non-PMS fields excluded from comparison.
+const EXCLUDE_FIELDS: &[&str] = &["INHERIT", "INHERITED", "_md5_"];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn token_multiset(s: &str) -> BTreeMap<&str, usize> {
+    let mut map = BTreeMap::new();
+    for tok in s.split_whitespace() {
+        *map.entry(tok).or_insert(0) += 1;
+    }
+    map
+}
+
+fn token_set(s: &str) -> BTreeSet<&str> {
+    s.split_whitespace().collect()
+}
+
+/// Parse `_eclasses_=` value (tab-separated name\thash pairs) into a sorted
+/// set of eclass names, ignoring checksums (which differ by implementation).
+fn eclasses_name_set(val: &str) -> BTreeSet<String> {
+    let parts: Vec<&str> = val.split('\t').collect();
+    parts
+        .chunks(2)
+        .filter_map(|c| if c.len() == 2 { Some(c[0].to_owned()) } else { None })
+        .collect()
+}
+
+/// Canonical serialization of a `SrcUriEntry` list: entries sorted, groups
+/// recursively sorted, so that insertion-order differences don't show as diffs.
+fn normalize_src_uri(entries: &[SrcUriEntry]) -> String {
+    let mut parts: Vec<String> = entries.iter().map(normalize_src_entry).collect();
+    parts.sort();
+    parts.join(" ")
+}
+
+fn normalize_src_entry(e: &SrcUriEntry) -> String {
+    match e {
+        SrcUriEntry::Uri { url, restriction, .. } => match restriction {
+            Some(r) => format!("{r}+{url}"),
+            None => url.clone(),
+        },
+        SrcUriEntry::Renamed { url, target, restriction } => match restriction {
+            Some(r) => format!("{r}+{url} -> {target}"),
+            None => format!("{url} -> {target}"),
+        },
+        SrcUriEntry::UseConditional { flag, negated, entries } => {
+            let prefix = if *negated { format!("!{flag}?") } else { format!("{flag}?") };
+            format!("{prefix} ( {} )", normalize_src_uri(entries))
+        }
+        SrcUriEntry::Group(entries) => {
+            format!("( {} )", normalize_src_uri(entries))
+        }
+    }
+}
+
+// ── Cache file parsing ────────────────────────────────────────────────────────
+
+fn parse_cache_file(path: &Path) -> BTreeMap<String, String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return BTreeMap::new(),
+    };
+    let mut map = BTreeMap::new();
+    for line in content.lines() {
+        if let Some((k, v)) = line.split_once('=') {
+            map.insert(k.to_owned(), v.to_owned());
+        }
+    }
+    map
+}
+
+// ── Per-file comparison ───────────────────────────────────────────────────────
+
+struct FileDiff {
+    cpv: String,
+    field: String,
+    a: String,
+    b: String,
+}
+
+fn compare_cache_entries(
+    cpv: &str,
+    map_a: &BTreeMap<String, String>,
+    map_b: &BTreeMap<String, String>,
+) -> Vec<FileDiff> {
+    let mut diffs = Vec::new();
+
+    let empty = String::new();
+
+    // Exact fields
+    for &key in EXACT_FIELDS {
+        let va = map_a.get(key).unwrap_or(&empty);
+        let vb = map_b.get(key).unwrap_or(&empty);
+        if va != vb {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: key.to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    // Token-set fields
+    for &key in SET_FIELDS {
+        let va = map_a.get(key).unwrap_or(&empty);
+        let vb = map_b.get(key).unwrap_or(&empty);
+        if token_set(va) != token_set(vb) {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: key.to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    // Dep-spec fields: token multiset (order-insensitive, group-insensitive for now)
+    for &key in DEP_FIELDS {
+        let va = map_a.get(key).unwrap_or(&empty);
+        let vb = map_b.get(key).unwrap_or(&empty);
+        if token_multiset(va) != token_multiset(vb) {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: key.to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    // SRC_URI: structural parse via SrcUriEntry, sorted for order-independence
+    {
+        let va = map_a.get("SRC_URI").unwrap_or(&empty);
+        let vb = map_b.get("SRC_URI").unwrap_or(&empty);
+        let na = SrcUriEntry::parse(va)
+            .map(|e| normalize_src_uri(&e))
+            .unwrap_or_else(|_| va.clone());
+        let nb = SrcUriEntry::parse(vb)
+            .map(|e| normalize_src_uri(&e))
+            .unwrap_or_else(|_| vb.clone());
+        if na != nb {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: "SRC_URI".to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    // _eclasses_: compare name sets, ignore checksums
+    {
+        let va = map_a.get("_eclasses_").unwrap_or(&empty);
+        let vb = map_b.get("_eclasses_").unwrap_or(&empty);
+        if eclasses_name_set(va) != eclasses_name_set(vb) {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: "_eclasses_".to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    // Warn about unknown fields present in one but not the other
+    let known: BTreeSet<&str> = EXACT_FIELDS
+        .iter()
+        .chain(SET_FIELDS)
+        .chain(DEP_FIELDS)
+        .chain(EXCLUDE_FIELDS)
+        .copied()
+        .chain(["SRC_URI", "_eclasses_"])
+        .collect();
+
+    for key in map_a.keys().chain(map_b.keys()) {
+        let key = key.as_str();
+        if known.contains(key) {
+            continue;
+        }
+        let va = map_a.get(key).unwrap_or(&empty);
+        let vb = map_b.get(key).unwrap_or(&empty);
+        if va != vb {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: format!("{key} (unknown)"),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    diffs
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+fn collect_entries(dir: &Path) -> BTreeMap<String, PathBuf> {
+    let mut map = BTreeMap::new();
+    let Ok(walk) = jwalk::WalkDir::new(dir).sort(true).try_into_iter() else {
+        return map;
+    };
+    for entry in walk.flatten() {
+        if entry.file_type().is_file() {
+            if let Ok(rel) = entry.path().strip_prefix(dir) {
+                let cpv = rel.to_string_lossy().into_owned();
+                map.insert(cpv, entry.path());
+            }
+        }
+    }
+    map
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    let mut dir_a: Option<PathBuf> = None;
+    let mut dir_b: Option<PathBuf> = None;
+    let mut jobs: usize = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--jobs" | "-j" => {
+                i += 1;
+                if i < args.len() {
+                    jobs = args[i].parse().unwrap_or(jobs);
+                }
+            }
+            _ => {
+                if dir_a.is_none() {
+                    dir_a = Some(PathBuf::from(&args[i]));
+                } else if dir_b.is_none() {
+                    dir_b = Some(PathBuf::from(&args[i]));
+                }
+            }
+        }
+        i += 1;
+    }
+
+    let (dir_a, dir_b) = match (dir_a, dir_b) {
+        (Some(a), Some(b)) => (a, b),
+        _ => {
+            eprintln!("Usage: compare_caches <dir-a> <dir-b> [--jobs N]");
+            std::process::exit(2);
+        }
+    };
+
+    let entries_a = collect_entries(&dir_a);
+    let entries_b = collect_entries(&dir_b);
+
+    let only_a: Vec<String> = entries_a
+        .keys()
+        .filter(|k| !entries_b.contains_key(*k))
+        .cloned()
+        .collect();
+    let only_b: Vec<String> = entries_b
+        .keys()
+        .filter(|k| !entries_a.contains_key(*k))
+        .cloned()
+        .collect();
+    let common: Vec<String> = entries_a
+        .keys()
+        .filter(|k| entries_b.contains_key(*k))
+        .cloned()
+        .collect();
+
+    let total = common.len();
+    eprintln!(
+        "Comparing {total} common entries ({} only in a, {} only in b) with {jobs} workers…",
+        only_a.len(),
+        only_b.len()
+    );
+
+    // Report missing entries
+    for cpv in &only_a {
+        eprintln!("ONLY-A: {cpv}");
+    }
+    for cpv in &only_b {
+        eprintln!("ONLY-B: {cpv}");
+    }
+
+    // Parallel comparison via flume
+    let (tx, rx) = flume::bounded::<(String, PathBuf, PathBuf)>(jobs * 4);
+    let progress = Arc::new(AtomicUsize::new(0));
+
+    let mut handles = Vec::new();
+    for _ in 0..jobs {
+        let rx = rx.clone();
+        let progress = Arc::clone(&progress);
+        handles.push(std::thread::spawn(move || {
+            let mut all_diffs: Vec<FileDiff> = Vec::new();
+            while let Ok((cpv, path_a, path_b)) = rx.recv() {
+                let n = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                eprint!("\r[{n}/{total}] {cpv:<60}");
+                let map_a = parse_cache_file(&path_a);
+                let map_b = parse_cache_file(&path_b);
+                all_diffs.extend(compare_cache_entries(&cpv, &map_a, &map_b));
+            }
+            all_diffs
+        }));
+    }
+    drop(rx);
+
+    for cpv in &common {
+        let path_a = entries_a[cpv].clone();
+        let path_b = entries_b[cpv].clone();
+        if tx.send((cpv.clone(), path_a, path_b)).is_err() {
+            break;
+        }
+    }
+    drop(tx);
+
+    let mut all_diffs: Vec<FileDiff> = Vec::new();
+    for h in handles {
+        all_diffs.extend(h.join().unwrap());
+    }
+    eprintln!();
+
+    all_diffs.sort_by(|a, b| a.cpv.cmp(&b.cpv).then(a.field.cmp(&b.field)));
+
+    let diff_count = all_diffs.len();
+    for d in &all_diffs {
+        println!("DIFF {} {}:", d.cpv, d.field);
+        println!("  a: {}", d.a);
+        println!("  b: {}", d.b);
+    }
+
+    println!(
+        "\nTotal: {total}  Only-a: {}  Only-b: {}  Field diffs: {diff_count}",
+        only_a.len(),
+        only_b.len()
+    );
+
+    if !only_a.is_empty() || !only_b.is_empty() || diff_count > 0 {
+        std::process::exit(1);
+    }
+}
