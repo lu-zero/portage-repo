@@ -393,6 +393,16 @@ impl EbuildShell {
         // (the authoritative source per PMS 7.3.1)
         let mut metadata = self.extract_metadata()?;
         metadata.eapi = eapi;
+
+        // CacheEntry::parse derives `inherited` from `_eclasses_`, which doesn't
+        // exist yet during regen. Populate it directly from the INHERITED shell
+        // variable set by the `inherit` builtin during sourcing.
+        let inherited_str = self.get_var("INHERITED").unwrap_or_default();
+        metadata.inherited = inherited_str
+            .split_whitespace()
+            .map(str::to_string)
+            .collect();
+
         Ok(metadata)
     }
 
