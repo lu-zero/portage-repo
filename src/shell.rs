@@ -36,6 +36,7 @@ const METADATA_VARS: &[&str] = &[
     "BDEPEND",
     "PDEPEND",
     "IDEPEND",
+    "INHERIT",
     "INHERITED",
 ];
 
@@ -347,6 +348,7 @@ impl EbuildShell {
             self.set_var(var, "");
             self.set_var(&format!("E_{var}"), "");
         }
+        self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
 
         // EAPI 6+ requires failglob in global scope (PMS 6, Table 6.1).
@@ -424,6 +426,15 @@ impl EbuildShell {
         Ok(())
     }
 
+    /// Resolve the path of a named eclass by searching the configured eclass directories.
+    pub fn eclass_path(&self, name: &str) -> Option<std::path::PathBuf> {
+        let filename = format!("{name}.eclass");
+        self.eclass_dirs
+            .iter()
+            .map(|dir| dir.join(&filename))
+            .find(|p| p.is_file())
+    }
+
     /// Read a variable from the shell environment.
     pub fn get_var(&self, name: &str) -> Option<String> {
         self.shell.env_str(name).map(|cow| cow.into_owned())
@@ -433,7 +444,7 @@ impl EbuildShell {
     fn set_var(&mut self, name: &str, value: &str) {
         let _ = self.shell.set_env_global(
             name,
-            ShellVariable::new(ShellValue::String(value.to_string())),
+            ShellVariable::new(ShellValue::String(value.to_string().into())),
         );
     }
 

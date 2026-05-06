@@ -54,10 +54,24 @@ async fn process_ebuild(
         .map_err(|e| format!("source: {e}"))?;
 
     if let Some(dir) = out_dir {
+        // Compute MD5 of the ebuild file itself.
+        let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
+        let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
+
+        // Compute MD5 checksums for each transitively inherited eclass.
+        let mut eclasses = Vec::new();
+        for name in &metadata.inherited {
+            if let Some(path) = shell.eclass_path(name) {
+                let data = fs::read(&path).map_err(|e| format!("read eclass {name}: {e}"))?;
+                let checksum = format!("{:x}", md5::compute(&data));
+                eclasses.push((name.clone(), checksum));
+            }
+        }
+
         let entry = CacheEntry {
             metadata,
-            md5: None,
-            eclasses: vec![],
+            md5: Some(ebuild_md5),
+            eclasses,
         };
         let category = ebuild.category();
         let cat_dir = dir.join(category);

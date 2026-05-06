@@ -12,7 +12,7 @@ categories = ["parser-implementations", "development-tools"]
 
 [dependencies]
 portage-atom = "0.5"
-portage-metadata = "0.3"
+portage-metadata = { path = "../portage-metadata" }
 gentoo-core = "0.4"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
@@ -30,6 +30,7 @@ itertools = "0.14.0"
 
 [dev-dependencies]
 libc = "0.2"
+md5 = "0.7"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "macros"] }
 
@@ -42,3 +43,4 @@ codegen-units = 1
 inherits = "release"
 debug = 1
 lto = false
+

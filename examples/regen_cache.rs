@@ -28,6 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -37,9 +38,10 @@ use portage_repo::{Ebuild, Repository};
 
 /// Fields to compare between sourced metadata and the md5-cache.
 ///
-/// Note: `INHERITED` is intentionally excluded — the md5-cache format does
-/// not store it (it uses `_eclasses_` with checksums instead), so the
-/// reference value is always empty and comparison is meaningless.
+/// Note: `INHERITED` (transitive eclass list) is intentionally excluded — it
+/// is stored in the md5-cache as `_eclasses_=` with checksums and is not a
+/// directly comparable text field.  `INHERIT` (direct eclass list) is included
+/// because both sides now produce it correctly.
 const COMPARE_KEYS: &[&str] = &[
     "EAPI",
     "DESCRIPTION",
@@ -58,6 +60,7 @@ const COMPARE_KEYS: &[&str] = &[
     "PDEPEND",
     "IDEPEND",
     "DEFINED_PHASES",
+    "INHERIT",
 ];
 
 /// Fields where token order does not affect semantic equivalence.
@@ -227,11 +230,26 @@ async fn process_ebuild(
         }
     };
 
+    // Compute MD5 of the ebuild file and its transitively inherited eclasses,
+    // matching what portage writes in _md5_ and _eclasses_.
+    let ebuild_md5 = fs::read(ebuild.path())
+        .map(|b| format!("{:x}", md5::compute(&b)))
+        .ok();
+
+    let mut eclasses = Vec::new();
+    for name in &metadata.inherited {
+        if let Some(path) = shell.eclass_path(name) {
+            if let Ok(data) = fs::read(&path) {
+                eclasses.push((name.clone(), format!("{:x}", md5::compute(&data))));
+            }
+        }
+    }
+
     // Build a CacheEntry from the sourced metadata and serialize both.
     let sourced_entry = CacheEntry {
         metadata,
-        md5: None,
-        eclasses: vec![],
+        md5: ebuild_md5,
+        eclasses,
     };
 
     let ref_serialized = reference.serialize();

@@ -64,6 +64,11 @@ impl builtins::Command for InheritCommand {
             ACCUM_VARS_BASE.to_vec()
         };
 
+        // Direct eclasses are those inherited when ECLASS is not set (top-level
+        // ebuild call), as opposed to nested calls from within an eclass.
+        let is_top_level = get_var(shell, "ECLASS").is_empty();
+        let mut inherit = get_var(shell, "INHERIT");
+
         // Read INHERITED
         let mut inherited = get_var(shell, "INHERITED");
 
@@ -144,13 +149,23 @@ impl builtins::Command for InheritCommand {
                 set_var(shell, var, saved_val);
             }
 
-            // Append to INHERITED
+            // Append to INHERITED (transitive list — all recursively inherited eclasses)
             if inherited.is_empty() {
                 inherited = eclass.clone();
             } else {
                 inherited = format!("{inherited} {eclass}");
             }
             set_var(shell, "INHERITED", &inherited);
+
+            // Append to INHERIT (direct list — only eclasses from the ebuild itself)
+            if is_top_level {
+                if inherit.is_empty() {
+                    inherit = eclass.clone();
+                } else {
+                    inherit = format!("{inherit} {eclass}");
+                }
+                set_var(shell, "INHERIT", &inherit);
+            }
         }
 
         Ok(brush_core::ExecutionResult::success())
@@ -173,7 +188,7 @@ fn set_var<SE: brush_core::ShellExtensions>(
 ) {
     let _ = shell.set_env_global(
         name,
-        brush_core::ShellVariable::new(brush_core::ShellValue::String(value.to_string())),
+        brush_core::ShellVariable::new(brush_core::ShellValue::String(value.to_string().into())),
     );
 }
 
