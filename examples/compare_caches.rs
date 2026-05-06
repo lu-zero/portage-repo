@@ -11,8 +11,8 @@
 //! | EAPI, DESCRIPTION, SLOT, HOMEPAGE             | Exact string equality             |
 //! | IUSE, KEYWORDS, DEFINED_PHASES                | Token set equality (order ignored)|
 //! | SRC_URI                                       | Parsed `SrcUriEntry` tree         |
-//! | DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND,   | Token multiset (unordered; `( )`  |
-//! |   LICENSE, RESTRICT, PROPERTIES, REQUIRED_USE | grouping tracked once AllOf lands)|
+//! | DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND,   | Parsed `DepEntry` tree, sorted    |
+//! |   LICENSE, RESTRICT, PROPERTIES, REQUIRED_USE | at each level for order-independence|
 //! | _eclasses_                                    | Eclass-name set (checksums differ |
 //! |                                               | by implementation, ignored here)  |
 //!
@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use portage_atom::DepEntry;
 use portage_metadata::SrcUriEntry;
 
 // ── Field classification ──────────────────────────────────────────────────────
@@ -38,12 +39,7 @@ const EXACT_FIELDS: &[&str] = &["EAPI", "DESCRIPTION", "SLOT", "HOMEPAGE"];
 /// Fields compared as unordered token sets (duplicates matter: multiset).
 const SET_FIELDS: &[&str] = &["IUSE", "KEYWORDS", "DEFINED_PHASES"];
 
-/// Dep-spec fields compared as token multisets.
-///
-/// Until `portage_atom::DepEntry` gains an `AllOf` variant the parse→serialize
-/// round-trip flattens bare `( )` groups, so we fall back to multiset
-/// comparison (which detects missing/extra atoms but not grouping changes).
-/// See <https://github.com/lu-zero/portage-atom/issues/16>.
+/// Dep-spec fields compared via `DepEntry::parse` + recursive sort.
 const DEP_FIELDS: &[&str] = &[
     "DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND",
     "LICENSE", "RESTRICT", "PROPERTIES", "REQUIRED_USE",
@@ -53,14 +49,6 @@ const DEP_FIELDS: &[&str] = &[
 const EXCLUDE_FIELDS: &[&str] = &["INHERIT", "INHERITED", "_md5_"];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-fn token_multiset(s: &str) -> BTreeMap<&str, usize> {
-    let mut map = BTreeMap::new();
-    for tok in s.split_whitespace() {
-        *map.entry(tok).or_insert(0) += 1;
-    }
-    map
-}
 
 fn token_set(s: &str) -> BTreeSet<&str> {
     s.split_whitespace().collect()
@@ -102,6 +90,36 @@ fn normalize_src_entry(e: &SrcUriEntry) -> String {
             format!("( {} )", normalize_src_uri(entries))
         }
     }
+}
+
+/// Canonical serialization of a `DepEntry` list: children sorted at every
+/// level, so insertion-order differences don't show as diffs.
+///
+/// PMS dep-spec lists are set-based (order is irrelevant), so sorting is safe.
+fn normalize_dep_entries(entries: &[DepEntry]) -> String {
+    let mut parts: Vec<String> = entries.iter().map(normalize_dep_entry).collect();
+    parts.sort();
+    parts.join(" ")
+}
+
+fn normalize_dep_entry(e: &DepEntry) -> String {
+    match e {
+        DepEntry::Atom(dep) => dep.to_string(),
+        DepEntry::UseConditional { flag, negate, children } => {
+            let prefix = if *negate { format!("!{flag}?") } else { format!("{flag}?") };
+            format!("{prefix} ( {} )", normalize_dep_entries(children))
+        }
+        DepEntry::AllOf(entries) => format!("( {} )", normalize_dep_entries(entries)),
+        DepEntry::AnyOf(entries) => format!("|| ( {} )", normalize_dep_entries(entries)),
+        DepEntry::ExactlyOneOf(entries) => format!("^^ ( {} )", normalize_dep_entries(entries)),
+        DepEntry::AtMostOneOf(entries) => format!("?? ( {} )", normalize_dep_entries(entries)),
+    }
+}
+
+fn normalize_dep(s: &str) -> String {
+    DepEntry::parse(s)
+        .map(|e| normalize_dep_entries(&e))
+        .unwrap_or_else(|_| s.to_owned())
 }
 
 // ── Cache file parsing ────────────────────────────────────────────────────────
@@ -166,11 +184,13 @@ fn compare_cache_entries(
         }
     }
 
-    // Dep-spec fields: token multiset (order-insensitive, group-insensitive for now)
+    // Dep-spec fields: structural parse via DepEntry, sorted for order-independence
     for &key in DEP_FIELDS {
         let va = map_a.get(key).unwrap_or(&empty);
         let vb = map_b.get(key).unwrap_or(&empty);
-        if token_multiset(va) != token_multiset(vb) {
+        let na = normalize_dep(va);
+        let nb = normalize_dep(vb);
+        if na != nb {
             diffs.push(FileDiff {
                 cpv: cpv.to_owned(),
                 field: key.to_owned(),

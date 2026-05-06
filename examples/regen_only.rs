@@ -76,14 +76,7 @@ async fn process_ebuild(
         let category = ebuild.category();
         let cat_dir = dir.join(category);
         fs::create_dir_all(&cat_dir).map_err(|e| format!("mkdir: {e}"))?;
-        // Use the raw filename stem (e.g. "kontrast-26.04.0") to preserve
-        // leading zeros in version components — portage uses the filename as-is.
-        let stem = ebuild
-            .path()
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
-        let cpv_file = cat_dir.join(stem);
+        let cpv_file = cat_dir.join(format!("{}-{}", ebuild.name(), ebuild.version()));
         fs::write(&cpv_file, entry.serialize()).map_err(|e| format!("write: {e}"))?;
     }
 

@@ -245,12 +245,14 @@ impl EbuildShell {
         let version = ebuild.version();
         // Use the raw filename version string to preserve leading zeros per PMS §7.2.
         // Version::to_string() normalises numeric components (26.04.0 → 26.4.0).
-        let pvr = ebuild.raw_pvr();
+        let pvr = version.to_string();
         let pr = format!("r{}", version.revision.0);
         let pv = if version.revision.0 > 0 {
-            pvr.strip_suffix(&format!("-{pr}")).unwrap_or(pvr)
+            pvr.strip_suffix(&format!("-{pr}"))
+                .unwrap_or(&pvr)
+                .to_owned()
         } else {
-            pvr
+            pvr.clone()
         };
         let p = format!("{pn}-{pv}");
         let pf = format!("{pn}-{pvr}");
