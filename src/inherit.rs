@@ -73,10 +73,26 @@ impl builtins::Command for InheritCommand {
         let mut inherited = get_var(shell, "INHERITED");
 
         for eclass in &self.eclasses {
-            // Skip if already inherited
+            // Skip re-sourcing if already inherited transitively, but still
+            // record direct inherits in INHERIT for top-level ebuild calls.
+            // e.g. `inherit acct-group user-info` where acct-group.eclass
+            // already pulled in user-info: user-info is skipped for sourcing
+            // but must still appear in INHERIT.
             let check = format!(" {eclass} ");
             let padded = format!(" {inherited} ");
             if padded.contains(&check) {
+                if is_top_level {
+                    let inherit_check = format!(" {eclass} ");
+                    let inherit_padded = format!(" {inherit} ");
+                    if !inherit_padded.contains(&inherit_check) {
+                        if inherit.is_empty() {
+                            inherit = eclass.clone();
+                        } else {
+                            inherit = format!("{inherit} {eclass}");
+                        }
+                        set_var(shell, "INHERIT", &inherit);
+                    }
+                }
                 continue;
             }
 
@@ -148,6 +164,10 @@ impl builtins::Command for InheritCommand {
                 // Restore saved (B_*) value
                 set_var(shell, var, saved_val);
             }
+
+            // Re-read INHERITED: sourcing the eclass may have updated it via
+            // nested `inherit` calls (e.g. acct-group.eclass inherits user-info).
+            inherited = get_var(shell, "INHERITED");
 
             // Append to INHERITED (transitive list — all recursively inherited eclasses)
             if inherited.is_empty() {

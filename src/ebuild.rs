@@ -30,11 +30,22 @@ static EAPI_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub struct Ebuild {
     cpv: Cpv,
     path: PathBuf,
+    /// Raw version-with-revision from the ebuild filename (e.g. `"26.04.0-r1"`).
+    /// Preserved verbatim so `PVR`/`PV` variables have the original string.
+    raw_pvr: String,
 }
 
 impl Ebuild {
     pub(crate) fn new(cpv: Cpv, path: PathBuf) -> Self {
-        Self { cpv, path }
+        let raw_pvr = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|stem| {
+                let prefix = format!("{}-", cpv.cpn.package);
+                stem.strip_prefix(&prefix).map(str::to_owned)
+            })
+            .unwrap_or_else(|| cpv.version.to_string());
+        Self { cpv, path, raw_pvr }
     }
 
     /// The full category/package-version atom.
@@ -55,6 +66,14 @@ impl Ebuild {
     /// The version.
     pub fn version(&self) -> &portage_atom::Version {
         &self.cpv.version
+    }
+
+    /// The raw version-with-revision string as written in the ebuild filename.
+    ///
+    /// Use this for `PV`/`PVR` shell variables — `Version::to_string()` strips
+    /// leading zeros from numeric components (`26.04.0` → `26.4.0`).
+    pub fn raw_pvr(&self) -> &str {
+        &self.raw_pvr
     }
 
     /// Absolute path to the `.ebuild` file.

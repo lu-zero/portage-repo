@@ -243,13 +243,15 @@ impl EbuildShell {
         let category = ebuild.category();
         let pn = ebuild.name();
         let version = ebuild.version();
-        let pv = version.base().to_string();
-        let pvr = if version.revision.0 > 0 {
-            format!("{pv}-r{}", version.revision.0)
-        } else {
-            pv.clone()
-        };
+        // Use the raw filename version string to preserve leading zeros per PMS §7.2.
+        // Version::to_string() normalises numeric components (26.04.0 → 26.4.0).
+        let pvr = ebuild.raw_pvr();
         let pr = format!("r{}", version.revision.0);
+        let pv = if version.revision.0 > 0 {
+            pvr.strip_suffix(&format!("-{pr}")).unwrap_or(pvr)
+        } else {
+            pvr
+        };
         let p = format!("{pn}-{pv}");
         let pf = format!("{pn}-{pvr}");
 
