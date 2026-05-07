@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use camino::{Utf8Path, Utf8PathBuf};
+
 use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
 use gentoo_core::Arch;
@@ -46,7 +48,7 @@ use crate::util;
 /// See [PMS 4 — Tree Layout](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
 #[derive(Debug, Clone)]
 pub struct Repository {
-    path: PathBuf,
+    path: Utf8PathBuf,
     layout: LayoutConf,
     name: String,
     arch_cache: Vec<Arch>,
@@ -58,25 +60,24 @@ impl Repository {
     /// Reads `metadata/layout.conf` and `profiles/repo_name` eagerly.
     /// Returns an error if the directory lacks a valid `layout.conf`.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
-        let path = path.into();
+        let std_path = path.into();
+        let path =
+            Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
         if !path.is_dir() {
-            return Err(Error::InvalidRepository(path));
+            return Err(Error::InvalidRepository(path.into_std_path_buf()));
         }
 
-        let layout = LayoutConf::from_repo(&path)?;
+        let layout = LayoutConf::from_repo(path.as_std_path())?;
 
-        let name = util::read_single_line(&path.join("profiles").join("repo_name"))?
-            .unwrap_or_else(|| {
-                path.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            });
+        let name = util::read_single_line(path.join("profiles").join("repo_name"))?
+            .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string());
 
-        let arch_cache: Vec<Arch> = util::read_lines(&path.join("profiles").join("arch.list"))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|s| Arch::intern(&s))
-            .collect();
+        let arch_cache: Vec<Arch> =
+            util::read_lines(path.join("profiles").join("arch.list"))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| Arch::intern(&s))
+                .collect();
 
         Ok(Repository {
             path,
@@ -87,7 +88,7 @@ impl Repository {
     }
 
     /// Absolute path to the repository root.
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
@@ -105,7 +106,7 @@ impl Repository {
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn categories(&self) -> Result<Vec<Category>> {
-        let lines = util::read_lines(&self.path.join("profiles").join("categories"))?;
+        let lines = util::read_lines(self.path.join("profiles").join("categories"))?;
         Ok(lines
             .into_iter()
             .map(|name| {
@@ -124,7 +125,7 @@ impl Repository {
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn ebuilds(&self) -> Result<Vec<Ebuild>> {
         let categories: HashSet<String> =
-            util::read_lines(&self.path.join("profiles").join("categories"))?
+            util::read_lines(self.path.join("profiles").join("categories"))?
                 .into_iter()
                 .collect();
 
@@ -152,13 +153,12 @@ impl Repository {
             .into_iter()
             .filter_map(|entry| {
                 let entry = entry.ok()?;
-                let path = entry.path();
-                let stem = path.file_name()?.to_string_lossy();
-                let stem = stem.strip_suffix(".ebuild")?;
-                let cat_name = path.parent()?.parent()?.file_name()?.to_string_lossy();
+                let path: Utf8PathBuf = entry.path().try_into().ok()?;
+                let stem = path.file_name()?.strip_suffix(".ebuild")?;
+                let cat_name = path.parent()?.parent()?.file_name()?;
 
                 let mut cpv_str = String::with_capacity(cat_name.len() + 1 + stem.len());
-                cpv_str.push_str(&cat_name);
+                cpv_str.push_str(cat_name);
                 cpv_str.push('/');
                 cpv_str.push_str(stem);
                 let cpv = Cpv::parse(&cpv_str).ok()?;
@@ -172,7 +172,7 @@ impl Repository {
 
     /// Look up a single category by name.
     pub fn category(&self, name: &str) -> Option<Category> {
-        let cat_path = self.path.join(name);
+        let cat_path: Utf8PathBuf = self.path.join(name);
         if cat_path.is_dir() {
             Some(Category::new(name.to_string(), cat_path))
         } else {
@@ -191,7 +191,7 @@ impl Repository {
             .join("metadata")
             .join("md5-cache")
             .join(cpv.to_string());
-        let contents = util::read_to_string(&cache_path)?;
+        let contents = util::read_to_string(cache_path)?;
         Ok(CacheEntry::parse(&contents)?)
     }
 
@@ -199,7 +199,7 @@ impl Repository {
     ///
     /// See [PMS 5](https://projects.gentoo.org/pms/9/pms.html#profiles).
     pub fn profiles_desc(&self) -> Result<Vec<ProfileDesc>> {
-        let lines = util::read_lines(&self.path.join("profiles").join("profiles.desc"))?;
+        let lines = util::read_lines(self.path.join("profiles").join("profiles.desc"))?;
         let mut descs = Vec::new();
         for line in lines {
             descs.push(ProfileDesc::parse(&line)?);
@@ -213,7 +213,7 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn profiles_eapi(&self) -> Result<Option<Eapi>> {
-        match util::read_single_line(&self.path.join("profiles").join("eapi"))? {
+        match util::read_single_line(self.path.join("profiles").join("eapi"))? {
             Some(s) => {
                 let eapi = s.parse::<Eapi>().map_err(|e| {
                     Error::InvalidProfile(format!("bad EAPI in profiles/eapi: {e}"))
@@ -232,7 +232,7 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn repo_package_mask(&self) -> Result<Vec<Dep>> {
-        let lines = util::read_lines(&self.path.join("profiles").join("package.mask"))?;
+        let lines = util::read_lines(self.path.join("profiles").join("package.mask"))?;
         lines
             .into_iter()
             .map(|l| Dep::parse(&l).map_err(Into::into))
@@ -254,7 +254,7 @@ impl Repository {
     ///
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn use_expand_names(&self) -> Result<Vec<String>> {
-        let dir = self.path.join("profiles").join("desc");
+        let dir: Utf8PathBuf = self.path.join("profiles").join("desc");
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -263,9 +263,12 @@ impl Repository {
         let mut names = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| util::io_err(&dir, e))?;
-            let fname = entry.file_name();
-            let fname = fname.to_string_lossy();
-            if let Some(stem) = fname.strip_suffix(".desc")
+            let path: Utf8PathBuf = match entry.path().try_into() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if let Some(fname) = path.file_name()
+                && let Some(stem) = fname.strip_suffix(".desc")
                 && !stem.starts_with('.')
             {
                 names.push(stem.to_string());
@@ -283,8 +286,7 @@ impl Repository {
     /// See [PMS 4.4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
     pub fn use_expand_desc(&self, name: &str) -> Result<Vec<(String, String)>> {
         parse_desc_file(
-            &self
-                .path
+            self.path
                 .join("profiles")
                 .join("desc")
                 .join(format!("{name}.desc")),
@@ -298,12 +300,15 @@ impl Repository {
     ///
     /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
     pub fn profile_updates(&self) -> Result<Vec<ProfileUpdate>> {
-        let dir = self.path.join("profiles").join("updates");
-        let mut files: Vec<_> = match std::fs::read_dir(&dir) {
+        let dir: Utf8PathBuf = self.path.join("profiles").join("updates");
+        let mut files: Vec<Utf8PathBuf> = match std::fs::read_dir(&dir) {
             Ok(entries) => entries
                 .filter_map(|e| e.ok())
-                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-                .map(|e| e.path())
+                .filter_map(|e| {
+                    let path: Utf8PathBuf = e.path().try_into().ok()?;
+                    let name = path.file_name()?;
+                    if name.starts_with('.') { None } else { Some(path) }
+                })
                 .collect(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(util::io_err(&dir, e)),
@@ -347,7 +352,7 @@ impl Repository {
     /// Open a profile directory relative to `profiles/`.
     pub fn profile(&self, relative_path: &str) -> Result<Profile> {
         let profile_path = self.path.join("profiles").join(relative_path);
-        Profile::open(profile_path)
+        Profile::open(profile_path.into())
     }
 
     /// Build the full profile stack for a profile relative to `profiles/`.
@@ -358,12 +363,12 @@ impl Repository {
     /// See [PMS 5.1](https://projects.gentoo.org/pms/9/pms.html#profiles).
     pub fn profile_stack(&self, relative_path: &str) -> Result<ProfileStack> {
         let profile_path = self.path.join("profiles").join(relative_path);
-        ProfileStack::build(profile_path)
+        ProfileStack::build(profile_path.into())
     }
 
     /// List available eclass names (without the `.eclass` extension).
     pub fn eclasses(&self) -> Result<Vec<String>> {
-        let eclass_dir = self.path.join("eclass");
+        let eclass_dir: Utf8PathBuf = self.path.join("eclass");
         let entries = match std::fs::read_dir(&eclass_dir) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -373,9 +378,11 @@ impl Repository {
         let mut names = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| util::io_err(&eclass_dir, e))?;
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-            if let Some(stem) = name.strip_suffix(".eclass") {
+            let path: Utf8PathBuf = match entry.path().try_into() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if let Some(stem) = path.file_name().and_then(|n| n.strip_suffix(".eclass")) {
                 names.push(stem.to_string());
             }
         }
@@ -385,7 +392,7 @@ impl Repository {
 
     /// List available license names from `licenses/`.
     pub fn licenses(&self) -> Result<Vec<String>> {
-        list_dir_names(&self.path.join("licenses"))
+        list_dir_names(self.path.join("licenses"))
     }
 
     /// Architectures declared in `profiles/arch.list` (typed).
@@ -412,14 +419,14 @@ impl Repository {
     ///
     /// Returns `(flag_name, description)` pairs.
     pub fn use_desc(&self) -> Result<Vec<(String, String)>> {
-        parse_desc_file(&self.path.join("profiles").join("use.desc"))
+        parse_desc_file(self.path.join("profiles").join("use.desc"))
     }
 
     /// Parse per-package USE flag descriptions from `profiles/use.local.desc`.
     ///
     /// Returns `(Cpn, flag_name, description)` tuples.
     pub fn use_local_desc(&self) -> Result<Vec<(Cpn, String, String)>> {
-        let lines = util::read_lines(&self.path.join("profiles").join("use.local.desc"))?;
+        let lines = util::read_lines(self.path.join("profiles").join("use.local.desc"))?;
         let mut result = Vec::new();
         for line in lines {
             // Format: category/package:flag - description
@@ -441,7 +448,7 @@ impl Repository {
     ///
     /// Returns `(mirror_name, [urls...])` pairs.
     pub fn thirdpartymirrors(&self) -> Result<Vec<(String, Vec<String>)>> {
-        let lines = util::read_lines(&self.path.join("profiles").join("thirdpartymirrors"))?;
+        let lines = util::read_lines(self.path.join("profiles").join("thirdpartymirrors"))?;
         let mut result = Vec::new();
         for line in lines {
             let mut parts = line.split_whitespace();
@@ -503,7 +510,7 @@ impl Repository {
         make_conf: Option<&std::path::Path>,
     ) -> Result<EbuildShell> {
         let path = self.path.join("profiles").join(profile_rel_path);
-        let stack = ProfileStack::build(path)?;
+        let stack = ProfileStack::build(path.into())?;
         let mut shell = EbuildShell::new(self).await?;
         let confs: Vec<&std::path::Path> = make_conf.into_iter().collect();
         stack.configure_shell(&mut shell, &confs).await?;
@@ -550,7 +557,8 @@ impl Repository {
 }
 
 /// List file/directory names in a directory (sorted, skipping dotfiles).
-fn list_dir_names(dir: &Path) -> Result<Vec<String>> {
+fn list_dir_names(dir: impl AsRef<Path>) -> Result<Vec<String>> {
+    let dir = dir.as_ref();
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -571,7 +579,7 @@ fn list_dir_names(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Parse a `flag - description` file format used by `use.desc` etc.
-fn parse_desc_file(path: &Path) -> Result<Vec<(String, String)>> {
+fn parse_desc_file(path: impl AsRef<Path>) -> Result<Vec<(String, String)>> {
     let lines = util::read_lines(path)?;
     let mut result = Vec::new();
     for line in lines {

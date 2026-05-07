@@ -106,7 +106,8 @@ async fn process_ebuild(
                 let path = shell
                     .eclass_path(name)
                     .ok_or_else(|| format!("eclass not found after sourcing: {name}"))?;
-                eclass_md5(&path, eclass_cache).map(|d| (name.clone(), format!("{d:x}")))
+                eclass_md5(path.as_std_path(), eclass_cache)
+                    .map(|d| (name.clone(), format!("{d:x}")))
             })
             .collect::<Result<Vec<_>, _>>()?;
 

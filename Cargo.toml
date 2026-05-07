@@ -33,6 +33,7 @@ roxmltree = "0.21.1"
 itertools = "0.14.0"
 dhat = { version = "0.3.3", optional = true }
 mimalloc = { version = "0.1.50", optional = true }
+camino = "1.2.2"
 
 [dev-dependencies]
 libc = "0.2"

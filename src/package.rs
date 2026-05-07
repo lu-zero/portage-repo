@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use camino::{Utf8Path, Utf8PathBuf};
 
 use portage_atom::{Cpn, Cpv};
 
@@ -16,11 +16,11 @@ use crate::util;
 #[derive(Debug, Clone)]
 pub struct Package {
     cpn: Cpn,
-    path: PathBuf,
+    path: Utf8PathBuf,
 }
 
 impl Package {
-    pub(crate) fn new(category: &str, name: String, path: PathBuf) -> Self {
+    pub(crate) fn new(category: &str, name: String, path: Utf8PathBuf) -> Self {
         Self {
             cpn: Cpn::new(category, &name),
             path,
@@ -43,7 +43,7 @@ impl Package {
     }
 
     /// Absolute path to the package directory.
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
@@ -55,18 +55,26 @@ impl Package {
         let entries = match std::fs::read_dir(&self.path) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(&self.path, e)),
+            Err(e) => return Err(util::io_err(self.path.as_std_path(), e)),
         };
 
         let mut ebuilds = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|e| util::io_err(&self.path, e))?;
-            let file_name = entry.file_name();
-            let name = file_name.to_string_lossy();
-            if let Some(stem) = name.strip_suffix(".ebuild") {
-                let cpv_str = format!("{}/{stem}", self.cpn.category);
+            let entry = entry.map_err(|e| util::io_err(self.path.as_std_path(), e))?;
+            let path: Utf8PathBuf = match entry.path().try_into() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if let Some(name) = path.file_name()
+                && let Some(stem) = name.strip_suffix(".ebuild")
+            {
+                let mut cpv_str =
+                    String::with_capacity(self.cpn.category.len() + 1 + stem.len());
+                cpv_str.push_str(&self.cpn.category);
+                cpv_str.push('/');
+                cpv_str.push_str(stem);
                 if let Ok(cpv) = Cpv::parse(&cpv_str) {
-                    ebuilds.push(Ebuild::new(cpv, entry.path()));
+                    ebuilds.push(Ebuild::new(cpv, path));
                 }
             }
         }
@@ -103,7 +111,7 @@ impl Package {
         match std::fs::read_to_string(&path) {
             Ok(contents) => Manifest::parse(&contents).map(Some),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(&path, e)),
+            Err(e) => Err(util::io_err(path.as_std_path(), e)),
         }
     }
 
@@ -122,7 +130,7 @@ impl Package {
         match std::fs::read_to_string(&path) {
             Ok(contents) => PkgMetadata::parse(&contents).map(Some),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(util::io_err(&path, e)),
+            Err(e) => Err(util::io_err(path.as_std_path(), e)),
         }
     }
 }

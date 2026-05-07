@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use camino::{Utf8Path, Utf8PathBuf};
 
 use crate::error::Result;
 use crate::package::Package;
@@ -12,11 +12,11 @@ use crate::util;
 #[derive(Debug, Clone)]
 pub struct Category {
     name: String,
-    path: PathBuf,
+    path: Utf8PathBuf,
 }
 
 impl Category {
-    pub(crate) fn new(name: String, path: PathBuf) -> Self {
+    pub(crate) fn new(name: String, path: Utf8PathBuf) -> Self {
         Self { name, path }
     }
 
@@ -26,7 +26,7 @@ impl Category {
     }
 
     /// Absolute path to the category directory.
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 
@@ -43,18 +43,18 @@ impl Category {
         let entries = match std::fs::read_dir(&self.path) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(util::io_err(&self.path, e)),
+            Err(e) => return Err(util::io_err(self.path.as_std_path(), e)),
         };
 
         let mut packages = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|e| util::io_err(&self.path, e))?;
+            let entry = entry.map_err(|e| util::io_err(self.path.as_std_path(), e))?;
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             if name.starts_with('.') || name == "CVS" {
                 continue;
             }
-            let path = entry.path();
+            let path: Utf8PathBuf = entry.path().try_into().ok().unwrap_or_default();
             if path.is_dir() {
                 packages.push(Package::new(&self.name, name.into_owned(), path));
             }

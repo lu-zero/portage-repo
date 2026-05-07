@@ -78,7 +78,7 @@ async fn main() {
         }
     };
 
-    println!("Sourcing {}", ebuild.path().display());
+    println!("Sourcing {}", ebuild.path());
     println!();
 
     // Create the shell and source the ebuild

@@ -1,5 +1,6 @@
-use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+
+use camino::{Utf8Path, Utf8PathBuf};
 
 use portage_atom::Cpv;
 use portage_metadata::Eapi;
@@ -29,11 +30,11 @@ static EAPI_RE: LazyLock<Regex> = LazyLock::new(|| {
 #[derive(Debug, Clone)]
 pub struct Ebuild {
     cpv: Cpv,
-    path: PathBuf,
+    path: Utf8PathBuf,
 }
 
 impl Ebuild {
-    pub(crate) fn new(cpv: Cpv, path: PathBuf) -> Self {
+    pub(crate) fn new(cpv: Cpv, path: Utf8PathBuf) -> Self {
         Self { cpv, path }
     }
 
@@ -58,7 +59,7 @@ impl Ebuild {
     }
 
     /// Absolute path to the `.ebuild` file.
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> &Utf8Path {
         &self.path
     }
 

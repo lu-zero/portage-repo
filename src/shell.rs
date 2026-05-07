@@ -1,5 +1,7 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use camino::Utf8PathBuf;
 
 use brush_builtins::ShellBuilderExt;
 use brush_core::parser::ParserImpl;
@@ -74,8 +76,8 @@ const PHASE_FUNCTIONS: &[(&str, Phase)] = &[
 /// for the metadata variables extracted after sourcing an ebuild.
 pub struct EbuildShell {
     shell: Shell,
-    repo_path: PathBuf,
-    eclass_dirs: Vec<PathBuf>,
+    repo_path: Utf8PathBuf,
+    eclass_dirs: Vec<Utf8PathBuf>,
     /// Active USE flags for this shell session.
     /// Used by the `use()`, `usev()`, `usex()` functions.
     use_flags: HashSet<String>,
@@ -98,8 +100,8 @@ impl EbuildShell {
             .await
             .map_err(|e| Error::Shell(e.to_string()))?;
 
-        let eclass_dir = repo.path().join("eclass");
-        let eclass_dirs = if eclass_dir.is_dir() {
+        let eclass_dir: Utf8PathBuf = repo.path().join("eclass");
+        let eclass_dirs: Vec<Utf8PathBuf> = if eclass_dir.is_dir() {
             vec![eclass_dir]
         } else {
             Vec::new()
@@ -201,7 +203,7 @@ impl EbuildShell {
     }
 
     /// Append an eclass directory (searched after existing dirs).
-    pub fn add_eclass_dir(&mut self, dir: PathBuf) {
+    pub fn add_eclass_dir(&mut self, dir: Utf8PathBuf) {
         self.eclass_dirs.push(dir);
         self.sync_eclass_dirs_var();
     }
@@ -210,7 +212,7 @@ impl EbuildShell {
     ///
     /// Used to add master repository eclass directories so they are
     /// searched before the overlay's own eclasses.
-    pub fn prepend_eclass_dir(&mut self, dir: PathBuf) {
+    pub fn prepend_eclass_dir(&mut self, dir: Utf8PathBuf) {
         self.eclass_dirs.insert(0, dir);
         self.sync_eclass_dirs_var();
     }
@@ -222,7 +224,7 @@ impl EbuildShell {
         let value: String = self
             .eclass_dirs
             .iter()
-            .map(|p| p.to_string_lossy())
+            .map(|p| p.as_str())
             .collect::<Vec<_>>()
             .join(":");
         self.set_var("__PORTAGE_ECLASS_DIRS", &value);
@@ -265,23 +267,18 @@ impl EbuildShell {
         self.set_var("P", &p);
         self.set_var("PF", &pf);
 
-        let filesdir = self
-            .repo_path
-            .join(category)
-            .join(pn)
-            .join("files")
-            .to_string_lossy()
-            .into_owned();
-        self.set_var("FILESDIR", &filesdir);
+        let filesdir = self.repo_path.join(category).join(pn).join("files");
+        self.set_var("FILESDIR", filesdir.as_str());
 
         // Detect EAPI before sourcing per PMS 7.3.1
         let eapi = ebuild.detect_eapi()?;
         self.set_var("EAPI", &eapi.to_string());
 
         // Absolute path to the ebuild file (PMS 11.1)
-        let ebuild_path =
-            std::fs::canonicalize(ebuild.path()).unwrap_or_else(|_| ebuild.path().to_path_buf());
-        self.set_var("EBUILD", &ebuild_path.to_string_lossy());
+        let ebuild_abs = std::fs::canonicalize(ebuild.path())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ebuild.path().to_string());
+        self.set_var("EBUILD", &ebuild_abs);
 
         // Build-directory variables (PMS 11.1)
         // Deterministic placeholders — no temp directories are created.
@@ -368,9 +365,9 @@ impl EbuildShell {
         // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
         let params = self.shell.default_exec_params();
         self.shell
-            .source_script(ebuild.path(), std::iter::empty::<&str>(), &params)
+            .source_script(ebuild.path().as_std_path(), std::iter::empty::<&str>(), &params)
             .await
-            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path().display())))?;
+            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
 
         // PMS 10.2: combine ebuild-defined values with eclass contributions.
         // After sourcing, `var` holds only what the ebuild set; `E_{var}` holds
@@ -412,11 +409,11 @@ impl EbuildShell {
     pub async fn source_eclass(&mut self, name: &str) -> Result<()> {
         let filename = format!("{name}.eclass");
         for dir in &self.eclass_dirs {
-            let path = dir.join(&filename);
+            let path: Utf8PathBuf = dir.join(&filename);
             if path.is_file() {
                 let params = self.shell.default_exec_params();
                 self.shell
-                    .source_script(&path, std::iter::empty::<&str>(), &params)
+                    .source_script(path.as_std_path(), std::iter::empty::<&str>(), &params)
                     .await
                     .map_err(|e| Error::Shell(format!("sourcing eclass {name}: {e}")))?;
                 return Ok(());
@@ -441,7 +438,7 @@ impl EbuildShell {
     }
 
     /// Resolve the path of a named eclass by searching the configured eclass directories.
-    pub fn eclass_path(&self, name: &str) -> Option<std::path::PathBuf> {
+    pub fn eclass_path(&self, name: &str) -> Option<Utf8PathBuf> {
         let filename = format!("{name}.eclass");
         self.eclass_dirs
             .iter()

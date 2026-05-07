@@ -3,15 +3,16 @@ use std::path::Path;
 use crate::error::{Error, Result};
 
 /// Create an `Error::Io` from a path and an `io::Error`.
-pub(crate) fn io_err(path: &Path, source: std::io::Error) -> Error {
+pub(crate) fn io_err(path: impl AsRef<Path>, source: std::io::Error) -> Error {
     Error::Io {
-        path: path.to_path_buf(),
+        path: path.as_ref().to_path_buf(),
         source,
     }
 }
 
 /// Read a file to a string, mapping I/O errors to `Error::Io`.
-pub(crate) fn read_to_string(path: &Path) -> Result<String> {
+pub(crate) fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
+    let path = path.as_ref();
     std::fs::read_to_string(path).map_err(|e| io_err(path, e))
 }
 
@@ -19,7 +20,8 @@ pub(crate) fn read_to_string(path: &Path) -> Result<String> {
 ///
 /// Lines starting with `#` (after trimming) are treated as comments.
 /// Returns an empty `Vec` if the file does not exist.
-pub(crate) fn read_lines(path: &Path) -> Result<Vec<String>> {
+pub(crate) fn read_lines(path: impl AsRef<Path>) -> Result<Vec<String>> {
+    let path = path.as_ref();
     match std::fs::read_to_string(path) {
         Ok(contents) => Ok(contents
             .lines()
@@ -35,7 +37,8 @@ pub(crate) fn read_lines(path: &Path) -> Result<Vec<String>> {
 /// Read the first non-blank, non-comment line from a file.
 ///
 /// Returns `None` if the file does not exist.
-pub(crate) fn read_single_line(path: &Path) -> Result<Option<String>> {
+pub(crate) fn read_single_line(path: impl AsRef<Path>) -> Result<Option<String>> {
+    let path = path.as_ref();
     match std::fs::read_to_string(path) {
         Ok(contents) => Ok(contents
             .lines()

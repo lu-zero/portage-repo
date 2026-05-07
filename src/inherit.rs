@@ -11,7 +11,7 @@
 //! for eclass metadata variable accumulation.
 
 use std::io::Write;
-use std::path::PathBuf;
+use camino::Utf8PathBuf;
 
 use brush_core::builtins;
 use clap::Parser;
@@ -122,7 +122,7 @@ impl builtins::Command for InheritCommand {
             // Source the eclass file — happens outside any bash function frame
             let params = shell.default_exec_params();
             let result = shell
-                .source_script(&eclass_file, std::iter::empty::<&str>(), &params)
+                .source_script(eclass_file.as_std_path(), std::iter::empty::<&str>(), &params)
                 .await;
 
             if let Err(e) = result {
@@ -207,11 +207,11 @@ fn set_var<SE: brush_core::ShellExtensions>(
 fn find_eclass<SE: brush_core::ShellExtensions>(
     shell: &brush_core::Shell<SE>,
     name: &str,
-) -> Option<PathBuf> {
+) -> Option<Utf8PathBuf> {
     let dirs = shell.env_str("__PORTAGE_ECLASS_DIRS")?;
     let filename = format!("{name}.eclass");
     for dir in dirs.split(':') {
-        let path = PathBuf::from(dir).join(&filename);
+        let path = Utf8PathBuf::from(dir).join(&filename);
         if path.is_file() {
             return Some(path);
         }

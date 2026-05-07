@@ -112,7 +112,7 @@ pub struct Profile {
 impl Profile {
     /// Open a profile at the given directory path.
     pub fn open(path: PathBuf) -> Result<Self> {
-        let eapi_str = util::read_single_line(&path.join("eapi"))?;
+        let eapi_str = util::read_single_line(path.join("eapi"))?;
         let eapi = match eapi_str {
             Some(s) => s
                 .parse::<Eapi>()
@@ -136,7 +136,7 @@ impl Profile {
     ///
     /// Paths are relative to this profile directory and resolved to absolute paths.
     pub fn parents(&self) -> Result<Vec<PathBuf>> {
-        let lines = util::read_lines(&self.path.join("parent"))?;
+        let lines = util::read_lines(self.path.join("parent"))?;
         Ok(lines.iter().map(|l| self.path.join(l)).collect())
     }
 
@@ -147,7 +147,7 @@ impl Profile {
     ///
     /// See [PMS 5.2.6](https://projects.gentoo.org/pms/9/pms.html#packages).
     pub fn packages(&self) -> Result<Vec<(bool, Dep)>> {
-        let lines = util::read_lines(&self.path.join("packages"))?;
+        let lines = util::read_lines(self.path.join("packages"))?;
         let mut result = Vec::new();
         for line in lines {
             let (is_system, atom_str) = if let Some(rest) = line.strip_prefix('*') {
@@ -177,22 +177,22 @@ impl Profile {
 
     /// Parse `use.force`.
     pub fn use_force(&self) -> Result<Vec<String>> {
-        util::read_lines(&self.path.join("use.force"))
+        util::read_lines(self.path.join("use.force"))
     }
 
     /// Parse `use.mask`.
     pub fn use_mask(&self) -> Result<Vec<String>> {
-        util::read_lines(&self.path.join("use.mask"))
+        util::read_lines(self.path.join("use.mask"))
     }
 
     /// Parse `use.stable.force`.
     pub fn use_stable_force(&self) -> Result<Vec<String>> {
-        util::read_lines(&self.path.join("use.stable.force"))
+        util::read_lines(self.path.join("use.stable.force"))
     }
 
     /// Parse `use.stable.mask`.
     pub fn use_stable_mask(&self) -> Result<Vec<String>> {
-        util::read_lines(&self.path.join("use.stable.mask"))
+        util::read_lines(self.path.join("use.stable.mask"))
     }
 
     /// Parse `package.use.force`.

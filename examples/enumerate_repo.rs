@@ -27,7 +27,7 @@ fn main() {
     };
 
     println!("Repository: {}", repo.name());
-    println!("Path: {}", repo.path().display());
+    println!("Path: {}", repo.path());
     println!("Masters: {:?}", repo.layout().masters);
     println!();
 
