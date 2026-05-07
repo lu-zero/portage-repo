@@ -14,6 +14,10 @@
 //!   regen_only gentoo 'dev-util/*'
 //!   regen_only gentoo -o /tmp/portage-cache -j 12
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -40,11 +44,25 @@ fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, S
     Ok(digest)
 }
 
-/// Check whether a CPV string matches a glob-like filter.
-fn matches_filter(cpv: &str, filter: &str) -> bool {
+/// Check whether an ebuild matches a glob-like filter (`cat/*` or `cat/pkg-ver`).
+///
+/// Uses `category()` to short-circuit before allocating a CPV string.
+fn matches_filter(ebuild: &Ebuild, filter: &str) -> bool {
     if filter.is_empty() {
-        return true; // No filter means match everything
+        return true;
     }
+    // Fast path: check category without allocating.
+    let cat_end = filter.find('/').unwrap_or(filter.len());
+    let filter_cat = &filter[..cat_end];
+    if ebuild.category() != filter_cat {
+        return false;
+    }
+    let rest = &filter[cat_end..]; // "/" or "/pkg*" or ""
+    if rest == "/" || rest.ends_with("/*") && rest.len() == 2 {
+        return true; // "cat/*"
+    }
+    // Fall back to full string for sub-package filters (rare).
+    let cpv = ebuild.cpv().to_string();
     if let Some(prefix) = filter.strip_suffix('*') {
         cpv.starts_with(prefix)
     } else {
@@ -105,6 +123,9 @@ async fn process_ebuild(
 
 #[tokio::main]
 async fn main() {
+    #[cfg(feature = "dhat-heap")]
+    let _dhat = dhat::Profiler::new_heap();
+
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <repo-path> [filter] [-o <cache-dir>] [-j <N>]", args[0]);
@@ -164,7 +185,7 @@ async fn main() {
     };
 
     if let Some(ref f) = filter {
-        ebuilds.retain(|eb| matches_filter(&eb.cpv().to_string(), f));
+        ebuilds.retain(|eb| matches_filter(eb, f));
     }
 
     let total = ebuilds.len();

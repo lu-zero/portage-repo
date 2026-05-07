@@ -157,7 +157,10 @@ impl Repository {
                 let stem = stem.strip_suffix(".ebuild")?;
                 let cat_name = path.parent()?.parent()?.file_name()?.to_string_lossy();
 
-                let cpv_str = format!("{cat_name}/{stem}");
+                let mut cpv_str = String::with_capacity(cat_name.len() + 1 + stem.len());
+                cpv_str.push_str(&cat_name);
+                cpv_str.push('/');
+                cpv_str.push_str(stem);
                 let cpv = Cpv::parse(&cpv_str).ok()?;
                 Some(Ebuild::new(cpv, path))
             })
