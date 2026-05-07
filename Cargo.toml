@@ -12,6 +12,7 @@ categories = ["parser-implementations", "development-tools"]
 
 [features]
 dhat-heap = ["dep:dhat"]
+mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 portage-atom = "0.6"
@@ -31,6 +32,7 @@ hex = "0.4"
 roxmltree = "0.21.1"
 itertools = "0.14.0"
 dhat = { version = "0.3.3", optional = true }
+mimalloc = { version = "0.1.50", optional = true }
 
 [dev-dependencies]
 libc = "0.2"
