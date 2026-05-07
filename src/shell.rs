@@ -458,7 +458,7 @@ impl EbuildShell {
     fn set_var(&mut self, name: &str, value: &str) {
         let _ = self.shell.set_env_global(
             name,
-            ShellVariable::new(ShellValue::String(value.to_string().into())),
+            ShellVariable::new(ShellValue::String(value.to_string())),
         );
     }
 
@@ -546,7 +546,11 @@ impl EbuildShell {
                 // newlines and tabs from heredocs / multi-line assignments,
                 // but the portage cache format expects single-line values
                 // with space-separated atoms.
-                let normalized: String = value.split_whitespace().collect::<Vec<_>>().join(" ");
+                let normalized = if value.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\t')) {
+                    itertools::join(value.split_whitespace(), " ")
+                } else {
+                    value
+                };
                 if !normalized.is_empty() {
                     cache_lines.push(format!("{var}={normalized}"));
                 }

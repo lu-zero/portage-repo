@@ -14,15 +14,31 @@
 //!   regen_only gentoo 'dev-util/*'
 //!   regen_only gentoo -o /tmp/portage-cache -j 12
 
+use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
+
+type EclassChecksumCache = Arc<Mutex<HashMap<PathBuf, md5::Digest>>>;
+
+fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, String> {
+    {
+        let guard = cache.lock().unwrap();
+        if let Some(&digest) = guard.get(path) {
+            return Ok(digest);
+        }
+    }
+    let data = fs::read(path).map_err(|e| format!("read eclass {}: {e}", path.display()))?;
+    let digest = md5::compute(&data);
+    cache.lock().unwrap().entry(path.to_path_buf()).or_insert(digest);
+    Ok(digest)
+}
 
 /// Check whether a CPV string matches a glob-like filter.
 fn matches_filter(cpv: &str, filter: &str) -> bool {
@@ -41,6 +57,7 @@ async fn process_ebuild(
     masters: &[Repository],
     ebuild: &Ebuild,
     out_dir: Option<&PathBuf>,
+    eclass_cache: &EclassChecksumCache,
 ) -> Result<(), String> {
     let master_refs: Vec<&Repository> = masters.iter().collect();
     let mut shell = repo
@@ -59,14 +76,17 @@ async fn process_ebuild(
         let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
 
         // Compute MD5 checksums for each transitively inherited eclass.
-        let mut eclasses = Vec::new();
-        for name in &metadata.inherited {
-            if let Some(path) = shell.eclass_path(name) {
-                let data = fs::read(&path).map_err(|e| format!("read eclass {name}: {e}"))?;
-                let checksum = format!("{:x}", md5::compute(&data));
-                eclasses.push((name.clone(), checksum));
-            }
-        }
+        // Results are cached across workers so each eclass is hashed once.
+        let eclasses = metadata
+            .inherited
+            .iter()
+            .map(|name| {
+                let path = shell
+                    .eclass_path(name)
+                    .ok_or_else(|| format!("eclass not found after sourcing: {name}"))?;
+                eclass_md5(&path, eclass_cache).map(|d| (name.clone(), format!("{d:x}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let entry = CacheEntry {
             metadata,
@@ -165,6 +185,7 @@ async fn main() {
     let repo = Arc::new(repo);
     let out_dir = Arc::new(out_dir);
     let errors = Arc::new(AtomicUsize::new(0));
+    let eclass_cache: EclassChecksumCache = Arc::new(Mutex::new(HashMap::new()));
 
     let mut handles = Vec::new();
     for _ in 0..jobs {
@@ -172,11 +193,18 @@ async fn main() {
         let repo = Arc::clone(&repo);
         let out_dir = Arc::clone(&out_dir);
         let errors = Arc::clone(&errors);
+        let eclass_cache = Arc::clone(&eclass_cache);
         handles.push(tokio::spawn(async move {
             let masters: Vec<portage_repo::Repository> = vec![];
             while let Ok(ebuild) = rx.recv_async().await {
-                if let Err(e) =
-                    process_ebuild(&repo, &masters, &ebuild, out_dir.as_ref().as_ref()).await
+                if let Err(e) = process_ebuild(
+                    &repo,
+                    &masters,
+                    &ebuild,
+                    out_dir.as_ref().as_ref(),
+                    &eclass_cache,
+                )
+                .await
                 {
                     let cpv = ebuild.cpv();
                     eprintln!("ERROR {cpv}: {e}");

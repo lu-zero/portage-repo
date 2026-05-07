@@ -78,20 +78,13 @@ impl builtins::Command for InheritCommand {
             // e.g. `inherit acct-group user-info` where acct-group.eclass
             // already pulled in user-info: user-info is skipped for sourcing
             // but must still appear in INHERIT.
-            let check = format!(" {eclass} ");
-            let padded = format!(" {inherited} ");
-            if padded.contains(&check) {
-                if is_top_level {
-                    let inherit_check = format!(" {eclass} ");
-                    let inherit_padded = format!(" {inherit} ");
-                    if !inherit_padded.contains(&inherit_check) {
-                        if inherit.is_empty() {
-                            inherit = eclass.clone();
-                        } else {
-                            inherit = format!("{inherit} {eclass}");
-                        }
-                        set_var(shell, "INHERIT", &inherit);
+            if inherited.split_whitespace().any(|e| e == eclass) {
+                if is_top_level && !inherit.split_whitespace().any(|e| e == eclass) {
+                    if !inherit.is_empty() {
+                        inherit.push(' ');
                     }
+                    inherit.push_str(eclass);
+                    set_var(shell, "INHERIT", &inherit);
                 }
                 continue;
             }
@@ -170,20 +163,18 @@ impl builtins::Command for InheritCommand {
             inherited = get_var(shell, "INHERITED");
 
             // Append to INHERITED (transitive list — all recursively inherited eclasses)
-            if inherited.is_empty() {
-                inherited = eclass.clone();
-            } else {
-                inherited = format!("{inherited} {eclass}");
+            if !inherited.is_empty() {
+                inherited.push(' ');
             }
+            inherited.push_str(eclass);
             set_var(shell, "INHERITED", &inherited);
 
             // Append to INHERIT (direct list — only eclasses from the ebuild itself)
             if is_top_level {
-                if inherit.is_empty() {
-                    inherit = eclass.clone();
-                } else {
-                    inherit = format!("{inherit} {eclass}");
+                if !inherit.is_empty() {
+                    inherit.push(' ');
                 }
+                inherit.push_str(eclass);
                 set_var(shell, "INHERIT", &inherit);
             }
         }
@@ -208,7 +199,7 @@ fn set_var<SE: brush_core::ShellExtensions>(
 ) {
     let _ = shell.set_env_global(
         name,
-        brush_core::ShellVariable::new(brush_core::ShellValue::String(value.to_string().into())),
+        brush_core::ShellVariable::new(brush_core::ShellValue::String(value.to_string())),
     );
 }
 
