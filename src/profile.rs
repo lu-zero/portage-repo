@@ -442,8 +442,9 @@ impl ProfileStack {
         let mut flags = collect_use_flags(shell);
 
         // Step 5: use.force — unconditionally add (overrides user conf).
+        let flag_set: HashSet<String> = flags.iter().cloned().collect();
         for flag in self.use_force()? {
-            if !flags.iter().any(|f| f == &flag) {
+            if !flag_set.contains(&flag) {
                 flags.push(flag);
             }
         }
@@ -569,12 +570,15 @@ fn merge_use_flags<I>(iter: I) -> Result<Vec<String>>
 where
     I: Iterator<Item = Result<Vec<String>>>,
 {
+    let mut seen = std::collections::HashSet::new();
     let mut acc: Vec<String> = Vec::new();
     for chunk in iter {
         for flag in chunk? {
             if let Some(name) = flag.strip_prefix('-') {
-                acc.retain(|f| f != name);
-            } else if !acc.contains(&flag) {
+                if seen.remove(name) {
+                    acc.retain(|f| f != name);
+                }
+            } else if seen.insert(flag.clone()) {
                 acc.push(flag);
             }
         }
