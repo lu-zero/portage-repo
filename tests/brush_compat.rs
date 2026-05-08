@@ -762,3 +762,238 @@ async fn nameref_nginx_dep_accumulation_global() {
         "nginx-style global nameref dep accumulation must write through nameref to BDEPEND"
     );
 }
+
+// ─── Inherit accumulation (B_*/E_* pattern, PMS 10.2) ──────────────────
+//
+// Tests for the metadata variable accumulation logic in the inherit builtin.
+// Each eclass must see empty accumulating vars; its contributions are captured
+// into E_* variables and the prior B_* values are restored.
+
+/// Create a minimal repo with an eclass directory for inherit tests.
+async fn inherit_shell() -> (TempDir, EbuildShell) {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    std::fs::create_dir_all(root.join("metadata")).unwrap();
+    std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+    std::fs::create_dir_all(root.join("profiles")).unwrap();
+    std::fs::write(root.join("profiles/repo_name"), "test-repo\n").unwrap();
+    std::fs::create_dir_all(root.join("eclass")).unwrap();
+
+    let repo = Repository::open(root).unwrap();
+    let shell = repo.shell().await.unwrap();
+    (tmp, shell)
+}
+
+/// Source a script string via `source_make_defaults` and return `__OUT`.
+async fn inherit_eval(shell: &mut EbuildShell, script: &str) -> String {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(tmp.path(), script).unwrap();
+    let _ = shell.source_make_defaults(tmp.path()).await;
+    shell.get_var("__OUT").unwrap_or_default()
+}
+
+#[tokio::test]
+async fn inherit_single_eclass_captures_iuse() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    // eclass that sets IUSE
+    std::fs::write(
+        tmp.path().join("eclass/foo.eclass"),
+        "IUSE=\"ssl threads\"\n",
+    )
+    .unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit foo
+        __OUT="E_IUSE=${E_IUSE} IUSE=${IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_IUSE=ssl threads IUSE=",
+        "single eclass: E_IUSE captures contribution, IUSE restored to empty"
+    );
+}
+
+#[tokio::test]
+async fn inherit_two_eclasses_accumulate() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(tmp.path().join("eclass/foo.eclass"), "IUSE=\"ssl\"\n").unwrap();
+    std::fs::write(tmp.path().join("eclass/bar.eclass"), "IUSE=\"threads\"\n").unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit foo bar
+        __OUT="E_IUSE=${E_IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_IUSE=ssl threads",
+        "two eclasses: E_IUSE accumulates both contributions"
+    );
+}
+
+#[tokio::test]
+async fn inherit_accumulates_depend_and_bdepend() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(
+        tmp.path().join("eclass/foo.eclass"),
+        "DEPEND=\"sys-libs/zlib\"\nBDEPEND=\"dev-util/cmake\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("eclass/bar.eclass"),
+        "DEPEND=\"dev-libs/openssl\"\n",
+    )
+    .unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=7
+        inherit foo bar
+        __OUT="E_DEPEND=${E_DEPEND} E_BDEPEND=${E_BDEPEND}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_DEPEND=sys-libs/zlib dev-libs/openssl E_BDEPEND=dev-util/cmake",
+        "DEPEND and BDEPEND accumulate independently"
+    );
+}
+
+#[tokio::test]
+async fn inherit_eapi7_excludes_properties_restrict() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(
+        tmp.path().join("eclass/foo.eclass"),
+        "PROPERTIES=\"live\"\nRESTRICT=\"test\"\nIUSE=\"ssl\"\n",
+    )
+    .unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=7
+        inherit foo
+        __OUT="E_PROPERTIES=${E_PROPERTIES:-unset} E_RESTRICT=${E_RESTRICT:-unset} E_IUSE=${E_IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_PROPERTIES=unset E_RESTRICT=unset E_IUSE=ssl",
+        "EAPI 7: PROPERTIES/RESTRICT are not accumulated (no E_PROPERTIES/E_RESTRICT vars)"
+    );
+}
+
+#[tokio::test]
+async fn inherit_eapi8_includes_properties_restrict() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(
+        tmp.path().join("eclass/foo.eclass"),
+        "PROPERTIES=\"live\"\nRESTRICT=\"test\"\nIUSE=\"ssl\"\n",
+    )
+    .unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit foo
+        __OUT="E_PROPERTIES=${E_PROPERTIES} E_RESTRICT=${E_RESTRICT} E_IUSE=${E_IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_PROPERTIES=live E_RESTRICT=test E_IUSE=ssl",
+        "EAPI 8: PROPERTIES/RESTRICT are accumulated into E_PROPERTIES/E_RESTRICT"
+    );
+}
+
+#[tokio::test]
+async fn inherit_nested_eclass() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    // bar.eclass inherits baz internally
+    std::fs::write(tmp.path().join("eclass/baz.eclass"), "IUSE=\"debug\"\n").unwrap();
+    std::fs::write(
+        tmp.path().join("eclass/bar.eclass"),
+        "inherit baz\nIUSE=\"threads\"\n",
+    )
+    .unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit bar
+        __OUT="E_IUSE=${E_IUSE} INHERITED=${INHERITED}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_IUSE=debug threads INHERITED=baz bar",
+        "nested inherit: baz's IUSE captured first, then bar's, INHERITED records order"
+    );
+}
+
+#[tokio::test]
+async fn inherit_skips_already_inherited() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(tmp.path().join("eclass/foo.eclass"), "IUSE=\"ssl\"\n").unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit foo
+        IUSE="${IUSE} extra"
+        inherit foo
+        __OUT="E_IUSE=${E_IUSE} IUSE=${IUSE}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "E_IUSE=ssl IUSE= extra",
+        "second inherit of same eclass is a no-op for sourcing but INHERIT still records it"
+    );
+}
+
+#[tokio::test]
+async fn inherit_inherit_var_records_direct_only() {
+    let (tmp, mut shell) = inherit_shell().await;
+
+    std::fs::write(tmp.path().join("eclass/baz.eclass"), "IUSE=\"debug\"\n").unwrap();
+    std::fs::write(
+        tmp.path().join("eclass/bar.eclass"),
+        "inherit baz\nIUSE=\"threads\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.path().join("eclass/foo.eclass"), "IUSE=\"ssl\"\n").unwrap();
+
+    let got = inherit_eval(
+        &mut shell,
+        r#"
+        EAPI=8
+        inherit foo bar
+        __OUT="INHERIT=${INHERIT} INHERITED=${INHERITED}"
+        "#,
+    )
+    .await;
+    assert_eq!(
+        got, "INHERIT=foo bar INHERITED=foo baz bar",
+        "INHERIT has direct eclasses only, INHERITED has all transitively"
+    );
+}

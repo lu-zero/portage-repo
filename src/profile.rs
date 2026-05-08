@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
-use portage_atom::Dep;
 use gentoo_core::Arch;
+use portage_atom::Dep;
 use portage_metadata::Eapi;
 
 use crate::error::{Error, Result};
@@ -163,9 +163,23 @@ impl Profile {
 
     /// Parse `package.mask`.
     ///
+    /// Lines prefixed with `-` remove a previously masked atom (PMS 5.2.8
+    /// incremental semantics). Since this is a single-profile view, removals
+    /// simply aren't included in the output.
+    ///
     /// See [PMS 5.2.8](https://projects.gentoo.org/pms/9/pms.html#packagemask).
     pub fn package_mask(&self) -> Result<Vec<Dep>> {
-        parse_atom_list(&self.path.join("package.mask"))
+        let lines = util::read_lines(self.path.join("package.mask"))?;
+        let mut result = Vec::new();
+        for line in lines {
+            if let Some(stripped) = line.strip_prefix('-') {
+                let dep = Dep::parse(stripped.trim())?;
+                result.retain(|d| d != &dep);
+            } else {
+                result.push(Dep::parse(line.trim())?);
+            }
+        }
+        Ok(result)
     }
 
     /// Parse `package.use`.
@@ -610,15 +624,6 @@ where
 // ---------------------------------------------------------------------------
 
 /// Parse a file containing one dependency atom per line.
-fn parse_atom_list(path: &Path) -> Result<Vec<Dep>> {
-    let lines = util::read_lines(path)?;
-    let mut result = Vec::new();
-    for line in lines {
-        result.push(Dep::parse(&line)?);
-    }
-    Ok(result)
-}
-
 /// Parse a file containing `atom flag1 flag2 ...` per line.
 fn parse_atom_flags_list(path: &Path) -> Result<Vec<(Dep, Vec<String>)>> {
     let lines = util::read_lines(path)?;
