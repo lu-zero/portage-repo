@@ -27,8 +27,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
@@ -44,7 +44,11 @@ fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, S
     }
     let data = fs::read(path).map_err(|e| format!("read eclass {}: {e}", path.display()))?;
     let digest = md5::compute(&data);
-    cache.lock().unwrap().entry(path.to_path_buf()).or_insert(digest);
+    cache
+        .lock()
+        .unwrap()
+        .entry(path.to_path_buf())
+        .or_insert(digest);
     Ok(digest)
 }
 
@@ -133,7 +137,10 @@ async fn main() {
 
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <repo-path> [filter] [-o <cache-dir>] [-j <N>]", args[0]);
+        eprintln!(
+            "Usage: {} <repo-path> [filter] [-o <cache-dir>] [-j <N>]",
+            args[0]
+        );
         eprintln!();
         eprintln!("Examples:");
         eprintln!("  {} gentoo", args[0]);

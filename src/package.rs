@@ -68,8 +68,7 @@ impl Package {
             if let Some(name) = path.file_name()
                 && let Some(stem) = name.strip_suffix(".ebuild")
             {
-                let mut cpv_str =
-                    String::with_capacity(self.cpn.category.len() + 1 + stem.len());
+                let mut cpv_str = String::with_capacity(self.cpn.category.len() + 1 + stem.len());
                 cpv_str.push_str(&self.cpn.category);
                 cpv_str.push('/');
                 cpv_str.push_str(stem);

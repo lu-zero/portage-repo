@@ -370,7 +370,11 @@ impl EbuildShell {
         // each eclass (PMS 10.2 / Portage B_*/E_* pattern).
         let params = self.shell.default_exec_params();
         self.shell
-            .source_script(ebuild.path().as_std_path(), std::iter::empty::<&str>(), &params)
+            .source_script(
+                ebuild.path().as_std_path(),
+                std::iter::empty::<&str>(),
+                &params,
+            )
             .await
             .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
 

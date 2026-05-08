@@ -10,8 +10,8 @@
 //! See [PMS 10.2](https://projects.gentoo.org/pms/9/pms.html#x1-10200010.2)
 //! for eclass metadata variable accumulation.
 
-use std::io::Write;
 use camino::Utf8PathBuf;
+use std::io::Write;
 
 use brush_core::builtins;
 use clap::Parser;
@@ -151,7 +151,11 @@ impl builtins::Command for InheritCommand {
             // Source the eclass file — happens outside any bash function frame
             let params = shell.default_exec_params();
             let result = shell
-                .source_script(eclass_file.as_std_path(), std::iter::empty::<&str>(), &params)
+                .source_script(
+                    eclass_file.as_std_path(),
+                    std::iter::empty::<&str>(),
+                    &params,
+                )
                 .await;
 
             if let Err(e) = result {

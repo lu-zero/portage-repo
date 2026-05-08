@@ -41,8 +41,15 @@ const SET_FIELDS: &[&str] = &["IUSE", "KEYWORDS", "DEFINED_PHASES"];
 
 /// Dep-spec fields compared via `DepEntry::parse` + recursive sort.
 const DEP_FIELDS: &[&str] = &[
-    "DEPEND", "RDEPEND", "BDEPEND", "PDEPEND", "IDEPEND",
-    "LICENSE", "RESTRICT", "PROPERTIES", "REQUIRED_USE",
+    "DEPEND",
+    "RDEPEND",
+    "BDEPEND",
+    "PDEPEND",
+    "IDEPEND",
+    "LICENSE",
+    "RESTRICT",
+    "PROPERTIES",
+    "REQUIRED_USE",
 ];
 
 /// Implementation / non-PMS fields excluded from comparison.
@@ -60,7 +67,13 @@ fn eclasses_name_set(val: &str) -> BTreeSet<String> {
     let parts: Vec<&str> = val.split('\t').collect();
     parts
         .chunks(2)
-        .filter_map(|c| if c.len() == 2 { Some(c[0].to_owned()) } else { None })
+        .filter_map(|c| {
+            if c.len() == 2 {
+                Some(c[0].to_owned())
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -74,16 +87,30 @@ fn normalize_src_uri(entries: &[SrcUriEntry]) -> String {
 
 fn normalize_src_entry(e: &SrcUriEntry) -> String {
     match e {
-        SrcUriEntry::Uri { url, restriction, .. } => match restriction {
+        SrcUriEntry::Uri {
+            url, restriction, ..
+        } => match restriction {
             Some(r) => format!("{r}+{url}"),
             None => url.clone(),
         },
-        SrcUriEntry::Renamed { url, target, restriction } => match restriction {
+        SrcUriEntry::Renamed {
+            url,
+            target,
+            restriction,
+        } => match restriction {
             Some(r) => format!("{r}+{url} -> {target}"),
             None => format!("{url} -> {target}"),
         },
-        SrcUriEntry::UseConditional { flag, negated, entries } => {
-            let prefix = if *negated { format!("!{flag}?") } else { format!("{flag}?") };
+        SrcUriEntry::UseConditional {
+            flag,
+            negated,
+            entries,
+        } => {
+            let prefix = if *negated {
+                format!("!{flag}?")
+            } else {
+                format!("{flag}?")
+            };
             format!("{prefix} ( {} )", normalize_src_uri(entries))
         }
         SrcUriEntry::Group(entries) => {
@@ -105,8 +132,16 @@ fn normalize_dep_entries(entries: &[DepEntry]) -> String {
 fn normalize_dep_entry(e: &DepEntry) -> String {
     match e {
         DepEntry::Atom(dep) => dep.to_string(),
-        DepEntry::UseConditional { flag, negate, children } => {
-            let prefix = if *negate { format!("!{flag}?") } else { format!("{flag}?") };
+        DepEntry::UseConditional {
+            flag,
+            negate,
+            children,
+        } => {
+            let prefix = if *negate {
+                format!("!{flag}?")
+            } else {
+                format!("{flag}?")
+            };
             format!("{prefix} ( {} )", normalize_dep_entries(children))
         }
         DepEntry::AllOf(entries) => format!("( {} )", normalize_dep_entries(entries)),

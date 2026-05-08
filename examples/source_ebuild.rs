@@ -60,7 +60,10 @@ async fn main() {
     let package = match category.package(&cpv.cpn.package) {
         Some(p) => p,
         None => {
-            eprintln!("Package {} not found in {}", cpv.cpn.package, cpv.cpn.category);
+            eprintln!(
+                "Package {} not found in {}",
+                cpv.cpn.package, cpv.cpn.category
+            );
             process::exit(1);
         }
     };

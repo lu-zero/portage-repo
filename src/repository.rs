@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use camino::{Utf8Path, Utf8PathBuf};
 
+use gentoo_core::Arch;
 use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
-use gentoo_core::Arch;
 use portage_metadata::{CacheEntry, Eapi};
 
 /// A single package-move or slot-move entry from `profiles/updates/`.
@@ -61,8 +61,7 @@ impl Repository {
     /// Returns an error if the directory lacks a valid `layout.conf`.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self> {
         let std_path = path.into();
-        let path =
-            Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
+        let path = Utf8PathBuf::from_path_buf(std_path).map_err(Error::InvalidRepository)?;
         if !path.is_dir() {
             return Err(Error::InvalidRepository(path.into_std_path_buf()));
         }
@@ -72,12 +71,11 @@ impl Repository {
         let name = util::read_single_line(path.join("profiles").join("repo_name"))?
             .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string());
 
-        let arch_cache: Vec<Arch> =
-            util::read_lines(path.join("profiles").join("arch.list"))
-                .unwrap_or_default()
-                .into_iter()
-                .map(|s| Arch::intern(&s))
-                .collect();
+        let arch_cache: Vec<Arch> = util::read_lines(path.join("profiles").join("arch.list"))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| Arch::intern(&s))
+            .collect();
 
         Ok(Repository {
             path,
@@ -307,7 +305,11 @@ impl Repository {
                 .filter_map(|e| {
                     let path: Utf8PathBuf = e.path().try_into().ok()?;
                     let name = path.file_name()?;
-                    if name.starts_with('.') { None } else { Some(path) }
+                    if name.starts_with('.') {
+                        None
+                    } else {
+                        Some(path)
+                    }
                 })
                 .collect(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
