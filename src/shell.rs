@@ -345,9 +345,14 @@ impl EbuildShell {
 
         // Clear accumulating vars and their E_* counterparts before sourcing.
         // The ebuild's own inherit calls will repopulate E_* during sourcing.
-        for &var in accum_vars {
+        let e_accum_pre: &[&str] = if eapi >= Eapi::Eight {
+            crate::inherit::E_VARS_ALL
+        } else {
+            crate::inherit::E_VARS_BASE
+        };
+        for (&var, &e_var) in accum_vars.iter().zip(e_accum_pre.iter()) {
             self.set_var(var, "");
-            self.set_var(&format!("E_{var}"), "");
+            self.set_var(e_var, "");
         }
         self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
@@ -372,10 +377,14 @@ impl EbuildShell {
         // PMS 10.2: combine ebuild-defined values with eclass contributions.
         // After sourcing, `var` holds only what the ebuild set; `E_{var}` holds
         // the total of all eclass contributions.  Append eclass total to ebuild value.
-        for &var in accum_vars {
+        let e_accum_vars: &[&str] = if eapi >= Eapi::Eight {
+            crate::inherit::E_VARS_ALL
+        } else {
+            crate::inherit::E_VARS_BASE
+        };
+        for (&var, &e_var) in accum_vars.iter().zip(e_accum_vars.iter()) {
             let ebuild_val = self.get_var(var).unwrap_or_default();
-            let e_var = format!("E_{var}");
-            let eclass_val = self.get_var(&e_var).unwrap_or_default();
+            let eclass_val = self.get_var(e_var).unwrap_or_default();
             let combined = match (ebuild_val.is_empty(), eclass_val.is_empty()) {
                 (true, true) => String::new(),
                 (true, false) => eclass_val.trim().to_string(),
@@ -383,7 +392,7 @@ impl EbuildShell {
                 (false, false) => format!("{} {}", ebuild_val, eclass_val.trim()),
             };
             self.set_var(var, &combined);
-            self.set_var(&e_var, ""); // clean up E_*
+            self.set_var(e_var, ""); // clean up E_*
         }
 
         // Extract metadata, then override EAPI with the pre-detected value
@@ -534,28 +543,31 @@ impl EbuildShell {
     /// Extract metadata from shell variables into a `CacheEntry`-compatible string
     /// and parse it via portage-metadata.
     fn extract_metadata(&self) -> Result<EbuildMetadata> {
-        let mut cache_lines = Vec::new();
-        for &var in METADATA_VARS {
-            if let Some(value) = self.get_var(var)
-                && !value.is_empty()
-            {
-                // Normalize whitespace: bash values may contain embedded
-                // newlines and tabs from heredocs / multi-line assignments,
-                // but the portage cache format expects single-line values
-                // with space-separated atoms.
+        // Collect (key, value) pairs directly from the shell environment,
+        // using Cow<str> to avoid cloning when the value needs no normalization.
+        let pairs: Vec<(&str, std::borrow::Cow<str>)> = METADATA_VARS
+            .iter()
+            .filter_map(|&var| {
+                let value = self.shell.env_str(var)?;
+                if value.is_empty() {
+                    return None;
+                }
+                // Normalize embedded newlines/tabs to spaces (heredoc values).
                 let normalized = if value.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\t')) {
-                    itertools::join(value.split_whitespace(), " ")
+                    std::borrow::Cow::Owned(itertools::join(value.split_whitespace(), " "))
                 } else {
                     value
                 };
-                if !normalized.is_empty() {
-                    cache_lines.push(format!("{var}={normalized}"));
+                if normalized.is_empty() {
+                    return None;
                 }
-            }
-        }
+                Some((var, normalized))
+            })
+            .collect();
 
-        let cache_str = cache_lines.join("\n");
-        let entry = portage_metadata::CacheEntry::parse(&cache_str)?;
+        let entry = portage_metadata::CacheEntry::from_kv_pairs(
+            pairs.iter().map(|(k, v)| (*k, v.as_ref())),
+        )?;
 
         // Compute DEFINED_PHASES by inspecting which phase functions are
         // defined in the shell after sourcing (PMS 7.4).
@@ -565,7 +577,7 @@ impl EbuildShell {
             .map(|(_, phase)| *phase)
             .collect();
         // Sort alphabetically by short name to match Portage's cache format.
-        defined_phases.sort_by_key(|p| p.to_string());
+        defined_phases.sort_by_key(|p| p.as_str());
 
         let mut metadata = entry.metadata;
         metadata.defined_phases = defined_phases;

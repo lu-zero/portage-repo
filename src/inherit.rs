@@ -27,8 +27,42 @@ const ACCUM_VARS_BASE: &[&str] = &[
     "IDEPEND",
 ];
 
-/// Additional accumulating variables for EAPI >= 8.
-const ACCUM_VARS_EAPI8: &[&str] = &["PROPERTIES", "RESTRICT"];
+/// All accumulating metadata variables for EAPI >= 8 (base + PROPERTIES + RESTRICT).
+const ACCUM_VARS_ALL: &[&str] = &[
+    "IUSE",
+    "REQUIRED_USE",
+    "DEPEND",
+    "BDEPEND",
+    "RDEPEND",
+    "PDEPEND",
+    "IDEPEND",
+    "PROPERTIES",
+    "RESTRICT",
+];
+
+/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_BASE`.
+pub(crate) const E_VARS_BASE: &[&str] = &[
+    "E_IUSE",
+    "E_REQUIRED_USE",
+    "E_DEPEND",
+    "E_BDEPEND",
+    "E_RDEPEND",
+    "E_PDEPEND",
+    "E_IDEPEND",
+];
+
+/// Precomputed `E_*` variable names parallel to `ACCUM_VARS_ALL`.
+pub(crate) const E_VARS_ALL: &[&str] = &[
+    "E_IUSE",
+    "E_REQUIRED_USE",
+    "E_DEPEND",
+    "E_BDEPEND",
+    "E_RDEPEND",
+    "E_PDEPEND",
+    "E_IDEPEND",
+    "E_PROPERTIES",
+    "E_RESTRICT",
+];
 
 /// Source eclasses and manage metadata variable accumulation per PMS 10.
 #[derive(Parser)]
@@ -53,15 +87,10 @@ impl builtins::Command for InheritCommand {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
 
-        // Build list of accumulating vars
-        let accum_vars: Vec<&str> = if eapi >= 8 {
-            ACCUM_VARS_BASE
-                .iter()
-                .chain(ACCUM_VARS_EAPI8.iter())
-                .copied()
-                .collect()
+        let (accum_vars, e_vars): (&[&str], &[&str]) = if eapi >= 8 {
+            (ACCUM_VARS_ALL, E_VARS_ALL)
         } else {
-            ACCUM_VARS_BASE.to_vec()
+            (ACCUM_VARS_BASE, E_VARS_BASE)
         };
 
         // Direct eclasses are those inherited when ECLASS is not set (top-level
@@ -106,12 +135,12 @@ impl builtins::Command for InheritCommand {
             // Each eclass sees empty vars, so its assignments are its own contribution.
             // Prior accumulated values are restored afterwards; they are not visible
             // to the eclass being sourced.
-            let saved: Vec<(String, String)> = accum_vars
+            let saved: Vec<(&'static str, String)> = accum_vars
                 .iter()
                 .map(|&var| {
                     let val = get_var(shell, var);
                     set_var(shell, var, "");
-                    (var.to_string(), val)
+                    (var, val)
                 })
                 .collect();
 
@@ -144,16 +173,15 @@ impl builtins::Command for InheritCommand {
             //
             // This preserves each eclass's independent contribution even when an
             // eclass unconditionally assigns (rather than appends to) a variable.
-            for (var, saved_val) in &saved {
+            for ((var, saved_val), &e_var) in saved.iter().zip(e_vars.iter()) {
                 let contribution = get_var(shell, var);
-                let e_var = format!("E_{var}");
-                let e_val = get_var(shell, &e_var);
+                let e_val = get_var(shell, e_var);
                 let new_e_val = match (e_val.is_empty(), contribution.is_empty()) {
                     (_, true) => e_val,
                     (true, false) => contribution,
                     (false, false) => format!("{e_val} {contribution}"),
                 };
-                set_var(shell, &e_var, &new_e_val);
+                set_var(shell, e_var, &new_e_val);
                 // Restore saved (B_*) value
                 set_var(shell, var, saved_val);
             }
