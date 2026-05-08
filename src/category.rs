@@ -73,3 +73,72 @@ impl Category {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("metadata")).unwrap();
+        std::fs::write(root.join("metadata/layout.conf"), "masters =\n").unwrap();
+        std::fs::create_dir_all(root.join("profiles")).unwrap();
+        std::fs::write(root.join("profiles/repo_name"), "test\n").unwrap();
+        tmp
+    }
+
+    #[test]
+    fn packages_lists_subdirectories() {
+        let tmp = setup_repo();
+        let cat_dir = tmp.path().join("dev-util");
+        std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
+        std::fs::create_dir_all(cat_dir.join("bar")).unwrap();
+        std::fs::write(cat_dir.join("README"), "not a package").unwrap();
+
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let pkgs = cat.packages().unwrap();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["bar", "foo"]);
+    }
+
+    #[test]
+    fn packages_skips_dotfiles() {
+        let tmp = setup_repo();
+        let cat_dir = tmp.path().join("dev-util");
+        std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
+        std::fs::create_dir_all(cat_dir.join(".hidden")).unwrap();
+
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        let pkgs = cat.packages().unwrap();
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name()).collect();
+        assert_eq!(names, vec!["foo"]);
+    }
+
+    #[test]
+    fn package_lookup_existing() {
+        let tmp = setup_repo();
+        let cat_dir = tmp.path().join("dev-util");
+        std::fs::create_dir_all(cat_dir.join("foo")).unwrap();
+
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        assert!(cat.package("foo").is_some());
+        assert!(cat.package("nonexistent").is_none());
+    }
+
+    #[test]
+    fn exists_checks_directory() {
+        let tmp = setup_repo();
+        let cat_dir = tmp.path().join("dev-util");
+        std::fs::create_dir_all(&cat_dir).unwrap();
+
+        let cat = Category::new("dev-util".into(), cat_dir.try_into().unwrap());
+        assert!(cat.exists());
+
+        let cat2 = Category::new(
+            "missing".into(),
+            tmp.path().join("no-such-dir").try_into().unwrap(),
+        );
+        assert!(!cat2.exists());
+    }
+}

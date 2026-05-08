@@ -722,4 +722,107 @@ mod tests {
         assert_eq!(updates.len(), 1);
         assert!(matches!(&updates[0], ProfileUpdate::Move { .. }));
     }
+
+    #[test]
+    fn category_lookup() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::create_dir_all(dir.path().join("dev-util")).unwrap();
+
+        assert!(repo.category("dev-util").is_some());
+        assert!(repo.category("nonexistent").is_none());
+    }
+
+    #[test]
+    fn cache_entry_reads_md5_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+
+        let cpv = Cpv::parse("dev-util/foo-1.0").unwrap();
+        let cache_dir = dir
+            .path()
+            .join("metadata")
+            .join("md5-cache")
+            .join("dev-util");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(
+            cache_dir.join("foo-1.0"),
+            "EAPI=8\nDESCRIPTION=test\nSLOT=0\n",
+        )
+        .unwrap();
+
+        let entry = repo.cache_entry(&cpv).unwrap();
+        assert_eq!(entry.metadata.eapi, Eapi::Eight);
+        assert_eq!(entry.metadata.description, "test");
+    }
+
+    #[test]
+    fn cache_entry_missing_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let cpv = Cpv::parse("dev-util/foo-1.0").unwrap();
+        assert!(repo.cache_entry(&cpv).is_err());
+    }
+
+    #[test]
+    fn profiles_desc_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::create_dir_all(dir.path().join("profiles").join("default").join("linux")).unwrap();
+        std::fs::write(
+            dir.path().join("profiles").join("profiles.desc"),
+            "amd64 default/linux/amd64/23.0 stable\n",
+        )
+        .unwrap();
+
+        let descs = repo.profiles_desc().unwrap();
+        assert_eq!(descs.len(), 1);
+        assert_eq!(descs[0].path(), "default/linux/amd64/23.0");
+    }
+
+    #[test]
+    fn ebuilds_lists_ebuilds() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::write(dir.path().join("profiles").join("categories"), "dev-util\n").unwrap();
+        let pkg_dir = dir.path().join("dev-util").join("foo");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("foo-1.0.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(pkg_dir.join("foo-2.0.ebuild"), "EAPI=8\n").unwrap();
+
+        let ebuilds = repo.ebuilds().unwrap();
+        assert_eq!(ebuilds.len(), 2);
+    }
+
+    #[test]
+    fn thirdpartymirrors_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::write(
+            dir.path().join("profiles").join("thirdpartymirrors"),
+            "foo https://foo.com/mirror1 https://foo.com/mirror2\n",
+        )
+        .unwrap();
+
+        let mirrors = repo.thirdpartymirrors().unwrap();
+        assert_eq!(mirrors.len(), 1);
+        assert_eq!(mirrors[0].0, "foo");
+        assert_eq!(mirrors[0].1.len(), 2);
+    }
+
+    #[test]
+    fn use_desc_parses() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        std::fs::write(
+            dir.path().join("profiles").join("use.desc"),
+            "ssl - Enable SSL support\nzlib - Use zlib compression\n",
+        )
+        .unwrap();
+
+        let descs = repo.use_desc().unwrap();
+        assert_eq!(descs.len(), 2);
+        assert_eq!(descs[0].0, "ssl");
+        assert_eq!(descs[0].1, "Enable SSL support");
+    }
 }

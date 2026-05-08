@@ -133,3 +133,104 @@ impl Package {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_pkg(category: &str, name: &str) -> (tempfile::TempDir, Package) {
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg_dir = tmp.path().join(category).join(name);
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        let pkg = Package::new(category, name.to_string(), pkg_dir.try_into().unwrap());
+        (tmp, pkg)
+    }
+
+    #[test]
+    fn ebuilds_parses_filenames() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        let dir = pkg.path();
+        std::fs::write(dir.join("foo-1.0.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(dir.join("foo-2.0-r1.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(dir.join("not-an-ebuild.txt"), "skip me").unwrap();
+
+        let ebuilds = pkg.ebuilds().unwrap();
+        assert_eq!(ebuilds.len(), 2);
+        assert_eq!(ebuilds[0].cpv().version.to_string(), "1.0");
+        assert_eq!(ebuilds[1].cpv().version.to_string(), "2.0-r1");
+    }
+
+    #[test]
+    fn ebuilds_skips_malformed_filenames() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        std::fs::write(pkg.path().join(".foo-1.0.ebuild"), "EAPI=8\n").unwrap();
+        std::fs::write(pkg.path().join("foo-.ebuild"), "EAPI=8\n").unwrap();
+
+        let ebuilds = pkg.ebuilds().unwrap();
+        assert!(ebuilds.is_empty());
+    }
+
+    #[test]
+    fn ebuild_lookup_by_version() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        std::fs::write(pkg.path().join("foo-1.0.ebuild"), "EAPI=8\n").unwrap();
+
+        let eb = pkg.ebuild("1.0").unwrap();
+        assert!(eb.is_some());
+        assert_eq!(eb.unwrap().cpv().version.to_string(), "1.0");
+
+        assert!(pkg.ebuild("99.0").unwrap().is_none());
+    }
+
+    #[test]
+    fn has_manifest() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        assert!(!pkg.has_manifest());
+        std::fs::write(pkg.path().join("Manifest"), "").unwrap();
+        assert!(pkg.has_manifest());
+    }
+
+    #[test]
+    fn manifest_parses() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        std::fs::write(
+            pkg.path().join("Manifest"),
+            "DIST foo-1.0.tar.gz 123 BLAKE2S abc SHA512 def\n",
+        )
+        .unwrap();
+
+        let m = pkg.manifest().unwrap().unwrap();
+        assert_eq!(m.entries.len(), 1);
+    }
+
+    #[test]
+    fn manifest_missing_returns_none() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        assert!(pkg.manifest().unwrap().is_none());
+    }
+
+    #[test]
+    fn metadata_xml_parses() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        std::fs::write(
+            pkg.path().join("metadata.xml"),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE pkgmetadata SYSTEM \"https://www.gentoo.org/dtd/metadata.dtd\">\n\
+             <pkgmetadata><use><flag name=\"ssl\">Enable SSL support</flag></use></pkgmetadata>\n",
+        )
+        .unwrap();
+
+        let meta = pkg.metadata_xml().unwrap().unwrap();
+        assert_eq!(meta.use_flags().len(), 1);
+        assert_eq!(
+            meta.use_flags().get("ssl").map(String::as_str),
+            Some("Enable SSL support")
+        );
+    }
+
+    #[test]
+    fn metadata_xml_missing_returns_none() {
+        let (_tmp, pkg) = setup_pkg("dev-util", "foo");
+        assert!(pkg.metadata_xml().unwrap().is_none());
+    }
+}
