@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use camino::Utf8PathBuf;
 
@@ -41,6 +41,29 @@ const METADATA_VARS: &[&str] = &[
     "INHERIT",
     "INHERITED",
 ];
+
+/// Maps a portage phase name to (EBUILD_PHASE value, function name).
+fn phase_to_func(phase: &str) -> (&str, &str) {
+    match phase {
+        "pretend"   => ("pretend",   "pkg_pretend"),
+        "setup"     => ("setup",     "pkg_setup"),
+        "unpack"    => ("unpack",    "src_unpack"),
+        "prepare"   => ("prepare",   "src_prepare"),
+        "configure" => ("configure", "src_configure"),
+        "compile"   => ("compile",   "src_compile"),
+        "test"      => ("test",      "src_test"),
+        "install"   => ("install",   "src_install"),
+        "preinst"   => ("preinst",   "pkg_preinst"),
+        "postinst"  => ("postinst",  "pkg_postinst"),
+        "prerm"     => ("prerm",     "pkg_prerm"),
+        "postrm"    => ("postrm",    "pkg_postrm"),
+        "nofetch"   => ("nofetch",   "pkg_nofetch"),
+        "info"      => ("info",      "pkg_info"),
+        "config"    => ("config",    "pkg_config"),
+        // accept raw function names too
+        other       => (other, other),
+    }
+}
 
 /// PMS phase function names mapped to their [`Phase`] variants.
 ///
@@ -414,6 +437,240 @@ impl EbuildShell {
             .collect();
 
         Ok(metadata)
+    }
+
+    /// Locate portage's script directory under `/usr/lib/portage`.
+    ///
+    /// Scans for a subdirectory (typically `pythonX.Y`) that contains
+    /// `isolated-functions.sh`, and returns the highest-sorted match.
+    fn find_portage_bin_path() -> Option<PathBuf> {
+        let mut dirs: Vec<PathBuf> = std::fs::read_dir("/usr/lib/portage")
+            .ok()?
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.is_dir() && p.join("isolated-functions.sh").exists() {
+                    Some(p)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        dirs.sort();
+        dirs.pop()
+    }
+
+    /// Source portage's bash function libraries and set up the build environment.
+    ///
+    /// Sets `PORTAGE_BIN_PATH`, prepends `ebuild-helpers/` to `PATH`, configures
+    /// a writable `DISTDIR`, passes through build-tool variables (`CFLAGS`,
+    /// `MAKEOPTS`, …) from the caller's environment, and sources:
+    ///
+    /// - `isolated-functions.sh` — `einfo`, `ewarn`, `eerror`, `ebegin`, `eend`, `die`, …
+    /// - `phase-functions.sh`   — `__ebuild_phase_funcs`, default phase implementations
+    /// - `phase-helpers.sh`     — `econf`, `unpack`, `insinto`, `into`, `use_enable`, …
+    ///
+    /// Failures to source individual files are warned rather than fatal so the
+    /// caller can still attempt to run phases against a partial environment.
+    pub async fn init_build_env(&mut self) -> Result<()> {
+        let bin_path = Self::find_portage_bin_path()
+            .ok_or_else(|| Error::Shell("portage not found under /usr/lib/portage".to_string()))?;
+
+        self.set_var("PORTAGE_BIN_PATH", &bin_path.to_string_lossy());
+
+        // Prepend ebuild-helpers to PATH so do*, new*, e* commands resolve.
+        let helpers = bin_path.join("ebuild-helpers");
+        let cur_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+        self.set_var("PATH", &format!("{}:{cur_path}", helpers.display()));
+
+        // Writable DISTDIR: honour env override, fall back to ~/.cache/distfiles.
+        let distdir = std::env::var("DISTDIR").unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{home}/.cache/distfiles")
+        });
+        std::fs::create_dir_all(&distdir).ok();
+        self.set_var("DISTDIR", &distdir);
+
+        // Pass through build-tool variables from the caller's environment.
+        for var in &[
+            "MAKEOPTS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
+            "CC", "CXX", "AR", "RANLIB", "NM", "STRIP", "PKG_CONFIG",
+        ] {
+            if let Ok(val) = std::env::var(var) {
+                self.set_var(var, &val);
+            }
+        }
+
+        // Source portage's function libraries in the same order as ebuild.sh.
+        let params = self.shell.default_exec_params();
+        for lib in &["isolated-functions.sh", "phase-functions.sh", "phase-helpers.sh"] {
+            let path = bin_path.join(lib);
+            if path.exists() {
+                if let Err(e) = self.shell
+                    .source_script(path.as_path(), std::iter::empty::<&str>(), &params)
+                    .await
+                {
+                    eprintln!("warning: could not source {lib}: {e}");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Source an ebuild and run a single phase function.
+    ///
+    /// Creates the standard build directories under `work_root` if they don't
+    /// exist, sets all PMS environment variables, sources the ebuild (which
+    /// triggers `inherit` and populates eclass functions), then calls the
+    /// phase function if it is defined.
+    ///
+    /// Unlike [`source_ebuild`], no metadata extraction is performed.  Output
+    /// from the phase (stdout/stderr) is passed through to the caller's
+    /// terminal.
+    ///
+    /// # Arguments
+    /// * `ebuild`    – the ebuild to source
+    /// * `phase`     – portage phase name (`"compile"`, `"install"`, …) or raw
+    ///                 function name (`"src_compile"`)
+    /// * `work_root` – root for build dirs; `work/`, `temp/`, `image/` are
+    ///                 created beneath it
+    pub async fn run_phase(&mut self, ebuild: &Ebuild, phase: &str, work_root: &Path) -> Result<()> {
+        let category = ebuild.category();
+        let pn = ebuild.name();
+        let version = ebuild.version();
+        let pvr = version.to_string();
+        let pr = format!("r{}", version.revision.0);
+        let pv = if version.revision.0 > 0 {
+            pvr.strip_suffix(&format!("-{pr}")).unwrap_or(&pvr).to_owned()
+        } else {
+            pvr.clone()
+        };
+        let p = format!("{pn}-{pv}");
+        let pf = format!("{pn}-{pvr}");
+
+        self.set_var("CATEGORY", category);
+        self.set_var("PN", pn);
+        self.set_var("PV", &pv);
+        self.set_var("PR", &pr);
+        self.set_var("PVR", &pvr);
+        self.set_var("P", &p);
+        self.set_var("PF", &pf);
+
+        let filesdir = self.repo_path.join(category).join(pn).join("files");
+        self.set_var("FILESDIR", filesdir.as_str());
+
+        let eapi = ebuild.detect_eapi()?;
+        self.set_var("EAPI", &eapi.to_string());
+
+        let ebuild_abs = std::fs::canonicalize(ebuild.path())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ebuild.path().to_string());
+        self.set_var("EBUILD", &ebuild_abs);
+
+        // Source portage's function libraries and configure build environment.
+        // Must happen after EAPI is set so phase-functions.sh registers the
+        // right EAPI-specific defaults.
+        self.init_build_env().await?;
+
+        // Create and set real build directories.
+        let workdir = work_root.join("work");
+        let t = work_root.join("temp");
+        let d = work_root.join("image");
+        let homedir = work_root.join("homedir");
+        for dir in [&workdir, &t, &d, &homedir] {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| Error::Shell(format!("creating {}: {e}", dir.display())))?;
+        }
+        self.set_var("WORKDIR", &workdir.to_string_lossy());
+        self.set_var("S", &workdir.join(&p).to_string_lossy());
+        self.set_var("T", &t.to_string_lossy());
+        self.set_var("TMPDIR", &t.to_string_lossy());
+        self.set_var("HOME", &homedir.to_string_lossy());
+        self.set_var("D", &format!("{}/", d.display()));
+        self.set_var("DISTDIR", "/var/cache/distfiles");
+
+        // Phase and merge variables.
+        let (phase_val, func_name) = phase_to_func(phase);
+        self.set_var("EBUILD_PHASE", phase_val);
+        self.set_var("EBUILD_PHASE_FUNC", func_name);
+        self.set_var("ROOT", "/");
+        self.set_var("MERGE_TYPE", "source");
+
+        if eapi >= Eapi::Three {
+            self.set_var("EPREFIX", "");
+            self.set_var("ED", &format!("{}/", d.display()));
+            self.set_var("EROOT", "/");
+        }
+        if eapi >= Eapi::Seven {
+            self.set_var("SYSROOT", "/");
+            self.set_var("ESYSROOT", "/");
+            self.set_var("BROOT", "/");
+        }
+
+        // Clear eclass accumulation state (same as source_ebuild).
+        let accum_vars: &[&str] = if eapi >= Eapi::Eight {
+            &["IUSE","REQUIRED_USE","DEPEND","BDEPEND","RDEPEND","PDEPEND","IDEPEND","PROPERTIES","RESTRICT"]
+        } else {
+            &["IUSE","REQUIRED_USE","DEPEND","BDEPEND","RDEPEND","PDEPEND","IDEPEND"]
+        };
+        let e_vars: &[&str] = if eapi >= Eapi::Eight {
+            inherit::E_VARS_ALL
+        } else {
+            inherit::E_VARS_BASE
+        };
+        for (&var, &e_var) in accum_vars.iter().zip(e_vars.iter()) {
+            self.set_var(var, "");
+            self.set_var(e_var, "");
+        }
+        self.set_var("INHERIT", "");
+        self.set_var("INHERITED", "");
+
+        if eapi >= Eapi::Six {
+            self.run_string("shopt -s failglob").await?;
+        } else {
+            self.run_string("shopt -u failglob").await?;
+        }
+
+        // Source the ebuild — defines all phase functions and global variables.
+        let params = self.shell.default_exec_params();
+        self.shell
+            .source_script(ebuild.path().as_std_path(), std::iter::empty::<&str>(), &params)
+            .await
+            .map_err(|e| Error::Shell(format!("sourcing {}: {e}", ebuild.path())))?;
+
+        // Combine eclass E_* contributions with ebuild-defined values (PMS 10.2).
+        for (&var, &e_var) in accum_vars.iter().zip(e_vars.iter()) {
+            let ebuild_val = self.get_var(var).unwrap_or_default();
+            let eclass_val = self.get_var(e_var).unwrap_or_default();
+            let combined = match (ebuild_val.is_empty(), eclass_val.is_empty()) {
+                (true, true) => String::new(),
+                (true, false) => eclass_val.trim().to_string(),
+                (false, true) => ebuild_val,
+                (false, false) => format!("{} {}", ebuild_val, eclass_val.trim()),
+            };
+            self.set_var(var, &combined);
+            self.set_var(e_var, "");
+        }
+
+        // Wire up `default` and any missing EAPI default implementations
+        // (e.g. src_compile → __eapi2_src_compile) for the current phase.
+        if self.shell.funcs().get("__ebuild_phase_funcs").is_some() {
+            self.run_string(&format!(
+                "__ebuild_phase_funcs {eapi} {func_name}"
+            ))
+            .await
+            .ok();
+        }
+
+        // Run the phase function if it is defined; warn otherwise.
+        if self.shell.funcs().get(func_name).is_some() {
+            self.run_string(func_name).await?;
+        } else {
+            eprintln!("warning: {func_name} not defined, nothing to do");
+        }
+
+        Ok(())
     }
 
     /// Source an eclass by name.
