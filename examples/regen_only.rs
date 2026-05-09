@@ -30,8 +30,11 @@ use std::process;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use brush_parser::ast::Program;
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
+
+type EclassAstCache = Arc<papaya::HashMap<String, Program>>;
 
 type EclassChecksumCache = Arc<Mutex<HashMap<PathBuf, md5::Digest>>>;
 
@@ -84,10 +87,11 @@ async fn process_ebuild(
     ebuild: &Ebuild,
     out_dir: Option<&PathBuf>,
     eclass_cache: &EclassChecksumCache,
+    ast_cache: &EclassAstCache,
 ) -> Result<(), String> {
     let master_refs: Vec<&Repository> = masters.iter().collect();
     let mut shell = repo
-        .shell_with_masters(&master_refs)
+        .shell_with_masters_and_cache(&master_refs, Arc::clone(ast_cache))
         .await
         .map_err(|e| format!("shell: {e}"))?;
 
@@ -219,6 +223,7 @@ async fn main() {
     let out_dir = Arc::new(out_dir);
     let errors = Arc::new(AtomicUsize::new(0));
     let eclass_cache: EclassChecksumCache = Arc::new(Mutex::new(HashMap::new()));
+    let ast_cache: EclassAstCache = Arc::new(papaya::HashMap::new());
 
     let mut handles = Vec::new();
     for _ in 0..jobs {
@@ -227,6 +232,7 @@ async fn main() {
         let out_dir = Arc::clone(&out_dir);
         let errors = Arc::clone(&errors);
         let eclass_cache = Arc::clone(&eclass_cache);
+        let ast_cache = Arc::clone(&ast_cache);
         handles.push(tokio::spawn(async move {
             let masters: Vec<portage_repo::Repository> = vec![];
             while let Ok(ebuild) = rx.recv_async().await {
@@ -236,6 +242,7 @@ async fn main() {
                     &ebuild,
                     out_dir.as_ref().as_ref(),
                     &eclass_cache,
+                    &ast_cache,
                 )
                 .await
                 {
