@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
@@ -482,6 +483,23 @@ impl Repository {
         let mut shell = EbuildShell::new(self).await?;
         // Prepend master eclass dirs in reverse order so the first master
         // ends up at position 0 (highest priority among masters).
+        for master in masters.iter().rev() {
+            let dir = master.path().join("eclass");
+            if dir.is_dir() {
+                shell.prepend_eclass_dir(dir);
+            }
+        }
+        Ok(shell)
+    }
+
+    /// Like [`shell_with_masters`](Self::shell_with_masters) but shares an
+    /// eclass AST cache across all created shells.
+    pub async fn shell_with_masters_and_cache(
+        &self,
+        masters: &[&Repository],
+        cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
+    ) -> Result<EbuildShell> {
+        let mut shell = EbuildShell::new_with_cache(self, cache).await?;
         for master in masters.iter().rev() {
             let dir = master.path().join("eclass");
             if dir.is_dir() {

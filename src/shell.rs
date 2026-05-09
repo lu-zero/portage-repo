@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 
@@ -113,6 +114,17 @@ impl EbuildShell {
     /// `EXPORT_FUNCTIONS`, etc.) and sets up eclass directories from
     /// the repository's `eclass/` directory.
     pub async fn new(repo: &Repository) -> Result<Self> {
+        Self::new_with_cache(repo, Arc::new(papaya::HashMap::new())).await
+    }
+
+    /// Create a new shell with a shared eclass AST cache.
+    ///
+    /// When processing many ebuilds, pass the same `Arc<papaya::HashMap>` to
+    /// every shell so that each eclass is parsed at most once.
+    pub async fn new_with_cache(
+        repo: &Repository,
+        eclass_cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
+    ) -> Result<Self> {
         let mut shell = Shell::builder()
             .default_builtins(brush_builtins::BuiltinSet::BashMode)
             .do_not_inherit_env(true)
@@ -133,11 +145,15 @@ impl EbuildShell {
         // Register Portage-specific shell functions (die, EXPORT_FUNCTIONS, etc.)
         builtins::register(&mut shell).await?;
 
-        // Register `inherit` as a Rust builtin (avoids brush-core scoping bug
-        // where arrays become invisible after nested source calls in functions).
-        shell.register_builtin(
+        // Register `inherit` with a shared eclass AST cache.
+        let inherit_state = inherit::InheritState {
+            inherited: Vec::new(),
+            cache: eclass_cache,
+        };
+        shell.register_builtin_with_state(
             "inherit",
             brush_core::builtins::builtin::<inherit::InheritCommand, _>(),
+            inherit_state,
         );
 
         // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
@@ -380,7 +396,7 @@ impl EbuildShell {
         self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
         if let Some(state) = self.shell.builtin_state_mut_of::<inherit::InheritCommand>("inherit") {
-            state.clear();
+            state.inherited.clear();
         }
 
         // EAPI 6+ requires failglob in global scope (PMS 6, Table 6.1).
@@ -435,7 +451,7 @@ impl EbuildShell {
         // `inherit` builtin's Rust state — no bash-string parsing needed.
         metadata.inherited = self.shell
             .builtin_state_of::<inherit::InheritCommand>("inherit")
-            .cloned()
+            .map(|s| s.inherited.clone())
             .unwrap_or_default();
 
         Ok(metadata)
@@ -628,7 +644,7 @@ impl EbuildShell {
         self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
         if let Some(state) = self.shell.builtin_state_mut_of::<inherit::InheritCommand>("inherit") {
-            state.clear();
+            state.inherited.clear();
         }
 
         if eapi >= Eapi::Six {

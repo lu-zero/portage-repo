@@ -20,6 +20,7 @@ portage-metadata = { path = "../portage-metadata", version = "0.4" }
 gentoo-core = "0.4"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
+brush-parser = { path = "../brush/brush-parser" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["rt"] }
 regex = "1"
@@ -34,6 +35,7 @@ itertools = "0.14.0"
 dhat = { version = "0.3.3", optional = true }
 mimalloc = { version = "0.1.50", optional = true }
 camino = "1.2.2"
+papaya = "0.2"
 
 [dev-dependencies]
 libc = "0.2"

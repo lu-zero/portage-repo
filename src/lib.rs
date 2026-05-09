@@ -37,7 +37,7 @@ mod builtins;
 mod category;
 mod ebuild;
 mod error;
-mod inherit;
+pub mod inherit;
 mod layout;
 mod manifest;
 mod package;

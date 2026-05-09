@@ -189,6 +189,7 @@ async fn process_ebuild(
     progress: &AtomicUsize,
     total: usize,
     quiet: bool,
+    eclass_cache: &Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
 ) -> (Stats, Vec<FieldDiff>) {
     let mut stats = Stats::default();
     let mut diffs = Vec::new();
@@ -201,9 +202,12 @@ async fn process_ebuild(
         eprint!("\r[{i}/{total}] {cpv_str:<60}");
     }
 
-    // Create a fresh shell for each ebuild (sourcing is not idempotent).
+    // Create a fresh shell for each ebuild (sourcing is not idempotent),
+    // but share the eclass AST cache across all shells.
     let master_refs: Vec<&Repository> = masters.iter().collect();
-    let mut shell = match repo.shell_with_masters(&master_refs).await {
+    let mut shell = match repo
+        .shell_with_masters_and_cache(&master_refs, eclass_cache.clone())
+        .await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("\nERROR creating shell for {cpv_str}: {e}");
@@ -409,6 +413,8 @@ async fn main() {
     let repo = Arc::new(repo);
     let masters = Arc::new(masters);
     let progress = Arc::new(AtomicUsize::new(0));
+    let eclass_cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>> =
+        Arc::new(papaya::HashMap::new());
 
     // Spawn worker tasks.
     let mut handles = Vec::new();
@@ -417,11 +423,12 @@ async fn main() {
         let repo = Arc::clone(&repo);
         let masters = Arc::clone(&masters);
         let progress = Arc::clone(&progress);
+        let eclass_cache = Arc::clone(&eclass_cache);
         handles.push(tokio::spawn(async move {
             let mut stats = Stats::default();
             let mut diffs = Vec::new();
             while let Ok(ebuild) = rx.recv_async().await {
-                let (s, d) = process_ebuild(&repo, &masters, &ebuild, &progress, total, quiet).await;
+                let (s, d) = process_ebuild(&repo, &masters, &ebuild, &progress, total, quiet, &eclass_cache).await;
                 stats.merge(s);
                 diffs.extend(d);
             }
@@ -475,7 +482,18 @@ async fn main() {
     println!("Sourced OK:    {}", stats.success);
     println!("Errors:        {}", stats.errors);
     println!("Mismatches:    {}", stats.mismatches);
-    println!("Missing cache: {}", stats.missing_cache);
+     println!("Missing cache: {}", stats.missing_cache);
+
+    let (hits, misses) = portage_repo::inherit::cache_stats();
+    let total_lookups = hits + misses;
+    if total_lookups > 0 {
+        println!(
+            "Eclass cache:  {} hits / {} misses ({:.1}% hit rate)",
+            hits,
+            misses,
+            hits as f64 / total_lookups as f64 * 100.0
+        );
+    }
 
     if stats.errors > 0 || stats.mismatches > 0 {
         process::exit(1);
