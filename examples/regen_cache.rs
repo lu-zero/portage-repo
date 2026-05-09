@@ -416,6 +416,19 @@ async fn main() {
     let eclass_cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>> =
         Arc::new(papaya::HashMap::new());
 
+    // Pre-parse all eclasses into the shared cache before spawning workers.
+    {
+        let master_refs: Vec<&Repository> = masters.iter().collect();
+        let shell = repo
+            .shell_with_masters_and_cache(&master_refs, Arc::clone(&eclass_cache))
+            .await
+            .expect("prewarm shell");
+        shell.prewarm_eclass_cache();
+        if !quiet {
+            eprintln!("Prewarmed {} eclasses.", eclass_cache.pin().len());
+        }
+    }
+
     // Spawn worker tasks.
     let mut handles = Vec::new();
     for _ in 0..jobs {

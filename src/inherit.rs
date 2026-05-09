@@ -241,7 +241,7 @@ pub fn cache_stats() -> (u64, u64) {
 }
 
 /// Parse an eclass file into a `Program`.
-fn parse_eclass_file(
+pub(crate) fn parse_eclass_file(
     path: &Utf8PathBuf,
     options: &brush_parser::ParserOptions,
 ) -> Program {
