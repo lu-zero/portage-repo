@@ -25,6 +25,7 @@ pub(crate) struct DieCommand {
 }
 
 impl builtins::Command for DieCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -54,6 +55,7 @@ pub(crate) struct ExportFunctionsCommand {
 }
 
 impl builtins::Command for ExportFunctionsCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -102,6 +104,7 @@ pub(crate) struct HasCommand {
 }
 
 impl builtins::Command for HasCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -124,6 +127,7 @@ pub(crate) struct HasvCommand {
 }
 
 impl builtins::Command for HasvCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -152,6 +156,7 @@ pub(crate) struct UseCommand {
 }
 
 impl builtins::Command for UseCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -177,6 +182,7 @@ pub(crate) struct UsevCommand {
 }
 
 impl builtins::Command for UsevCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -212,6 +218,7 @@ pub(crate) struct UsexCommand {
 }
 
 impl builtins::Command for UsexCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -247,6 +254,7 @@ pub(crate) struct UseEnableCommand {
 }
 
 impl builtins::Command for UseEnableCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -280,6 +288,7 @@ pub(crate) struct UseWithCommand {
 }
 
 impl builtins::Command for UseWithCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -313,6 +322,7 @@ pub(crate) struct InIuseCommand {
 }
 
 impl builtins::Command for InIuseCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -343,6 +353,7 @@ impl builtins::Command for InIuseCommand {
 pub(crate) struct VerReplacingCommand {}
 
 impl builtins::Command for VerReplacingCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(

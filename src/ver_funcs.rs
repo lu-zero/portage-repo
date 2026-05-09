@@ -111,6 +111,7 @@ pub(crate) struct VerRsCommand {
 }
 
 impl builtins::Command for VerRsCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     fn new<I: IntoIterator<Item = String>>(args: I) -> Result<Self, clap::Error> {
@@ -192,6 +193,7 @@ pub(crate) struct VerCutCommand {
 }
 
 impl builtins::Command for VerCutCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     fn new<I: IntoIterator<Item = String>>(args: I) -> Result<Self, clap::Error> {
@@ -462,6 +464,7 @@ pub(crate) struct VerTestCommand {
 }
 
 impl builtins::Command for VerTestCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     fn new<I: IntoIterator<Item = String>>(args: I) -> Result<Self, clap::Error> {
