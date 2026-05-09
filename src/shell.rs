@@ -379,6 +379,9 @@ impl EbuildShell {
         }
         self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
+        if let Some(state) = self.shell.builtin_state_mut_of::<inherit::InheritCommand>("inherit") {
+            state.clear();
+        }
 
         // EAPI 6+ requires failglob in global scope (PMS 6, Table 6.1).
         // Reset each call so re-used shells get the right state per ebuild.
@@ -428,13 +431,12 @@ impl EbuildShell {
         metadata.eapi = eapi;
 
         // CacheEntry::parse derives `inherited` from `_eclasses_`, which doesn't
-        // exist yet during regen. Populate it directly from the INHERITED shell
-        // variable set by the `inherit` builtin during sourcing.
-        let inherited_str = self.get_var("INHERITED").unwrap_or_default();
-        metadata.inherited = inherited_str
-            .split_whitespace()
-            .map(str::to_string)
-            .collect();
+        // exist yet during regen. Read the transitive list directly from the
+        // `inherit` builtin's Rust state — no bash-string parsing needed.
+        metadata.inherited = self.shell
+            .builtin_state_of::<inherit::InheritCommand>("inherit")
+            .cloned()
+            .unwrap_or_default();
 
         Ok(metadata)
     }
@@ -625,6 +627,9 @@ impl EbuildShell {
         }
         self.set_var("INHERIT", "");
         self.set_var("INHERITED", "");
+        if let Some(state) = self.shell.builtin_state_mut_of::<inherit::InheritCommand>("inherit") {
+            state.clear();
+        }
 
         if eapi >= Eapi::Six {
             self.run_string("shopt -s failglob").await?;

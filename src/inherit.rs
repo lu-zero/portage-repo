@@ -73,7 +73,10 @@ pub(crate) struct InheritCommand {
 }
 
 impl builtins::Command for InheritCommand {
-    type State = ();
+    /// Transitive list of inherited eclasses, accumulated across recursive `inherit` calls.
+    /// Replaces the bash-string round-trip through `$INHERITED` for Rust-side dedup checks.
+    /// The `INHERITED` shell variable is still written for bash code that reads it.
+    type State = Vec<String>;
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -99,16 +102,16 @@ impl builtins::Command for InheritCommand {
         let is_top_level = get_var(shell, "ECLASS").is_empty();
         let mut inherit = get_var(shell, "INHERIT");
 
-        // Read INHERITED
-        let mut inherited = get_var(shell, "INHERITED");
-
         for eclass in &self.eclasses {
             // Skip re-sourcing if already inherited transitively, but still
             // record direct inherits in INHERIT for top-level ebuild calls.
             // e.g. `inherit acct-group user-info` where acct-group.eclass
             // already pulled in user-info: user-info is skipped for sourcing
             // but must still appear in INHERIT.
-            if inherited.split_whitespace().any(|e| e == eclass) {
+            let already_inherited = shell
+                .builtin_state_of::<Self>("inherit")
+                .is_some_and(|state| state.contains(eclass));
+            if already_inherited {
                 if is_top_level {
                     if !inherit.is_empty() {
                         inherit.push(' ');
@@ -191,16 +194,17 @@ impl builtins::Command for InheritCommand {
                 set_var(shell, var, saved_val);
             }
 
-            // Re-read INHERITED: sourcing the eclass may have updated it via
-            // nested `inherit` calls (e.g. acct-group.eclass inherits user-info).
-            inherited = get_var(shell, "INHERITED");
-
-            // Append to INHERITED (transitive list — all recursively inherited eclasses)
-            if !inherited.is_empty() {
-                inherited.push(' ');
+            // Append to state (transitive list — all recursively inherited eclasses).
+            // Nested `inherit` calls already pushed their eclasses to the same state entry,
+            // so we just need to append this eclass. Keep $INHERITED in sync for bash code.
+            if let Some(state) = shell.builtin_state_mut_of::<Self>("inherit") {
+                state.push(eclass.clone());
             }
-            inherited.push_str(eclass);
-            set_var(shell, "INHERITED", &inherited);
+            let inherited_str = shell
+                .builtin_state_of::<Self>("inherit")
+                .map(|s| s.join(" "))
+                .unwrap_or_default();
+            set_var(shell, "INHERITED", &inherited_str);
 
             // Append to INHERIT (direct list — only eclasses from the ebuild itself)
             if is_top_level {
