@@ -73,6 +73,7 @@ pub(crate) struct InheritCommand {
 }
 
 impl builtins::Command for InheritCommand {
+    type State = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -108,7 +109,7 @@ impl builtins::Command for InheritCommand {
             // already pulled in user-info: user-info is skipped for sourcing
             // but must still appear in INHERIT.
             if inherited.split_whitespace().any(|e| e == eclass) {
-                if is_top_level && !inherit.split_whitespace().any(|e| e == eclass) {
+                if is_top_level {
                     if !inherit.is_empty() {
                         inherit.push(' ');
                     }
