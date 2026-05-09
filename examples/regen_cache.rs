@@ -188,6 +188,7 @@ async fn process_ebuild(
     ebuild: &Ebuild,
     progress: &AtomicUsize,
     total: usize,
+    quiet: bool,
 ) -> (Stats, Vec<FieldDiff>) {
     let mut stats = Stats::default();
     let mut diffs = Vec::new();
@@ -196,7 +197,9 @@ async fn process_ebuild(
     let cpv = ebuild.cpv();
     let cpv_str = cpv.to_string();
     let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
-    eprint!("\r[{i}/{total}] {cpv_str:<60}");
+    if !quiet {
+        eprint!("\r[{i}/{total}] {cpv_str:<60}");
+    }
 
     // Create a fresh shell for each ebuild (sourcing is not idempotent).
     let master_refs: Vec<&Repository> = masters.iter().collect();
@@ -320,6 +323,7 @@ async fn main() {
     // Parse optional --repos-dir, --jobs, and filter from remaining args.
     let mut filter: Option<String> = None;
     let mut repos_dir: Option<&str> = None;
+    let mut quiet = false;
     let mut jobs: usize = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
@@ -346,6 +350,9 @@ async fn main() {
                     eprintln!("--jobs requires an argument");
                     process::exit(2);
                 }
+            }
+            "--quiet" | "-q" => {
+                quiet = true;
             }
             _ => {
                 if filter.is_none() {
@@ -414,7 +421,7 @@ async fn main() {
             let mut stats = Stats::default();
             let mut diffs = Vec::new();
             while let Ok(ebuild) = rx.recv_async().await {
-                let (s, d) = process_ebuild(&repo, &masters, &ebuild, &progress, total).await;
+                let (s, d) = process_ebuild(&repo, &masters, &ebuild, &progress, total, quiet).await;
                 stats.merge(s);
                 diffs.extend(d);
             }
@@ -446,7 +453,9 @@ async fn main() {
     }
 
     // Clear the progress line.
-    eprintln!();
+    if !quiet {
+        eprintln!();
+    }
 
     // Print diff summary.
     if !diffs.is_empty() {

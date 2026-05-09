@@ -557,7 +557,9 @@ impl EbuildShell {
                     return None;
                 }
                 // Normalize embedded newlines/tabs to spaces (heredoc values).
-                let normalized = if value.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\t')) {
+                let normalized = if var == "DESCRIPTION" {
+                    std::borrow::Cow::Owned(itertools::join(value.split_whitespace(), " "))
+                } else if value.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\t')) {
                     std::borrow::Cow::Owned(itertools::join(value.split_whitespace(), " "))
                 } else {
                     value
