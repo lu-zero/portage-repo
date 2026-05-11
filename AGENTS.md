@@ -77,6 +77,16 @@ Do not assume existing patterns are correct; verify against the PMS.
   key phases, measured against `dev-libs/*` (≈1,236 ebuilds) on macOS. Update this
   file whenever a change intentionally affects performance so regressions are visible.
 
+- **`bench-regen.sh`** — benchmark `regen_only` at multiple thread counts, reporting
+  wall time and peak RSS. Accepts optional list of job counts as arguments.
+
+- **`bench-pk.sh`** — same measurement for `pk repo metadata regen` (pkgcraft).
+  Expects `../pkgcraft/target/release/pk` or `PK=<path>` in the environment.
+
+- **`bench.sh`** — head-to-head comparison: runs both `regen_only` and `pk` at the
+  same job counts using `hyperfine`, then produces a combined timing+RSS table.
+  Requires `hyperfine` to be installed.
+
 ### Running a quick comparison
 
 ```bash
@@ -88,6 +98,126 @@ cargo build --release --example regen_only
 Use single-threaded (`-j 1`) for per-change comparisons — variance is tighter than
 the parallel run. Record results in `benchmark_baseline.txt` with the date and a
 short phase description.
+
+### portage-repo vs pkgcraft head-to-head
+
+Both scripts write to a temporary output directory and measure peak RSS via
+`/proc/PID/status` polling (more accurate than `ru_maxrss` on Linux):
+
+```bash
+# portage-repo only (all default job counts: 4 8 16 20 24 32 40)
+GENTOO_REPO=/var/db/repos/gentoo ./bench-regen.sh
+
+# pkgcraft only
+GENTOO_REPO=/var/db/repos/gentoo PK=../pkgcraft/target/release/pk ./bench-pk.sh
+
+# head-to-head (requires hyperfine)
+GENTOO_REPO=/var/db/repos/gentoo ./bench.sh 4 8 16 32
+
+# build pkgcraft if needed
+cargo build --release --manifest-path ../pkgcraft/Cargo.toml --bin pk
+```
+
+The combined table from `bench.sh` looks like:
+
+```
+   j   regen real   regen RSS     pk real      pk RSS
+------------------------------------------------------
+   4      84.12s      117 MB      12.34s        89 MB
+   8      48.67s      167 MB       7.10s       143 MB
+```
+
+## Cache Comparison
+
+After generating caches with different tools, use the `compare_caches` example to
+compare them field by field. It uses the `portage-metadata` parsers for semantic
+comparison (parsed dep trees, token sets) rather than raw text diff, so ordering
+differences do not produce false positives.
+
+### Generating reference caches
+
+```bash
+REPO=/var/db/repos/gentoo
+
+# portage-repo
+OUT_PR=$(mktemp -d) && cargo run --release --example regen_only -- "$REPO" -o "$OUT_PR"
+
+# pkgcraft
+OUT_PK=$(mktemp -d) && pk repo metadata regen -j 16 -p "$OUT_PK" -n -f "$REPO"
+
+# portage (egencache) — writes into the repo itself unless --external-cache-only is used
+OUT_PORTAGE=$(mktemp -d)
+egencache --update --repo gentoo --external-cache-only \
+    --repositories-configuration "[gentoo]
+location = $REPO" \
+    --cache-dir "$OUT_PORTAGE" -j 16
+# Note: egencache requires portage to be configured with the repo. Alternatively:
+#   emerge --metadata --jobs 16  (writes to REPO/metadata/md5-cache/)
+#   then OUT_PORTAGE=$REPO/metadata/md5-cache
+```
+
+### Comparing two caches
+
+```bash
+cargo build --release --example compare_caches
+
+# portage-repo vs pkgcraft
+./target/release/examples/compare_caches "$OUT_PR" "$OUT_PK"
+
+# portage-repo vs portage reference
+./target/release/examples/compare_caches "$OUT_PR" "$OUT_PORTAGE"
+
+# pkgcraft vs portage reference
+./target/release/examples/compare_caches "$OUT_PK" "$OUT_PORTAGE"
+```
+
+Output for each field difference:
+
+```
+DIFF cat/pkg-1.0 IUSE:
+  a: nls ssl threads
+  b: nls threads ssl
+```
+
+Exit code is 0 only when all fields match and no entries are missing from either side.
+
+### Comparison strategy per field
+
+| Field(s)                                            | How compared                         |
+|-----------------------------------------------------|--------------------------------------|
+| EAPI, DESCRIPTION, SLOT, HOMEPAGE                   | Exact string equality                |
+| IUSE, KEYWORDS, DEFINED_PHASES                      | Token set (order ignored)            |
+| DEPEND, RDEPEND, BDEPEND, PDEPEND, IDEPEND,         | Parsed dep tree, nodes sorted at     |
+|   LICENSE, RESTRICT, PROPERTIES, REQUIRED_USE       | each level for order-independence    |
+| SRC_URI                                             | Parsed SrcUriEntry tree              |
+| _eclasses_                                          | Eclass-name set (checksums ignored)  |
+| INHERIT, INHERITED, _md5_                           | Excluded (implementation-specific)   |
+
+### Deduplication semantics
+
+The three implementations differ in how they handle duplicate tokens in incremental
+metadata variables (IUSE, DEPEND, RDEPEND, etc.):
+
+| Implementation | Approach                                                  |
+|----------------|-----------------------------------------------------------|
+| **portage**    | No deduplication — raw concatenation of eclass strings   |
+| **pkgcraft**   | Deduplicates via `IndexSet`, first-occurrence wins        |
+| **portage-repo** | Same as pkgcraft: `IndexSet` in `InheritState::accumulated` |
+
+Because `compare_caches` parses DEPEND/RDEPEND/… as dep trees and IUSE/KEYWORDS as
+token sets, duplicate tokens in portage output do not cause false-positive diffs.
+However they are visible in the raw `a:` / `b:` lines.
+
+To flag ebuilds that contribute duplicate tokens themselves (as opposed to
+duplicates arising from eclass accumulation), portage-repo emits a `QA:` warning
+during sourcing:
+
+```
+QA: cat/pkg-1.0: IUSE has duplicate tokens: nls
+```
+
+This fires only when the ebuild's own IUSE/DEPEND/… string has repeated tokens
+before merging with eclass contributions.
 
 ## Debugging parsing issues
 
