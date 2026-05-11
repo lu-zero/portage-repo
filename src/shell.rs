@@ -158,9 +158,9 @@ __eapi8_src_prepare() {
 }
 nonfatal() { "$@"; }
 assert() {
-    (( $? == 0 )) && return
+    local pipestatus=("${PIPESTATUS[@]}")
     local x
-    for x in "${PIPESTATUS[@]}"; do
+    for x in "${pipestatus[@]}"; do
         (( x == 0 )) && continue
         [[ $# -gt 0 ]] && die "$@" || die "assert: command failed"
     done
@@ -175,7 +175,10 @@ eapply() {
 }
 eapply_user() { :; }
 einstalldocs() { :; }
-get_libdir() { echo "lib64"; }
+get_libdir() {
+    local libdir_var="LIBDIR_${ABI}"
+    [[ -n ${ABI} && -n ${!libdir_var} ]] && echo "${!libdir_var}" || echo "lib"
+}
 "#;
 
 /// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
