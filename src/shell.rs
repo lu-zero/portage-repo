@@ -90,6 +90,94 @@ const PHASE_FUNCTIONS: &[(&str, Phase)] = &[
     ("pkg_nofetch", Phase::PkgNofetch),
 ];
 
+/// Per-EAPI default phase implementations loaded by `init_build_env`.
+///
+/// These bash functions are called by `__ebuild_phase_funcs` (a Rust builtin)
+/// when wiring up `default()` and `default_<phase>()`.  The functions call
+/// `econf` / `emake` / `eapply` which are Rust builtins.
+const PHASE_DEFAULT_FUNCTIONS: &str = r#"
+__eapi0_pkg_nofetch() {
+    [[ -z ${A} ]] && return
+    elog "The following files cannot be fetched for ${PN}:"
+    local x
+    for x in ${A}; do elog "   ${x}"; done
+}
+__eapi0_src_unpack() { [[ -n ${A} ]] && unpack ${A}; }
+__eapi0_src_compile() {
+    if [[ -x ./configure ]]; then econf; fi
+    __eapi2_src_compile
+}
+__eapi0_src_test() {
+    local emake_cmd="${MAKE:-make} ${MAKEOPTS} ${EXTRA_EMAKE}"
+    if ${emake_cmd} check -n &>/dev/null; then
+        ${emake_cmd} check || die "check target failed"
+    elif ${emake_cmd} test -n &>/dev/null; then
+        ${emake_cmd} test || die "test target failed"
+    fi
+}
+__eapi1_src_compile() { __eapi2_src_configure; __eapi2_src_compile; }
+__eapi2_src_prepare() { :; }
+__eapi2_src_configure() {
+    if [[ -x ${ECONF_SOURCE:-.}/configure ]]; then econf; fi
+}
+__eapi2_src_compile() {
+    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
+        emake || die "emake failed"
+    fi
+}
+__eapi4_src_install() {
+    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
+        emake DESTDIR="${D}" install || die "emake install failed"
+    fi
+}
+__eapi6_src_prepare() {
+    if [[ -n ${PATCHES+set} ]]; then
+        if [[ ${PATCHES@a} == *a* ]]; then
+            [[ ${#PATCHES[@]} -gt 0 ]] && eapply "${PATCHES[@]}"
+        elif [[ -n ${PATCHES} ]]; then
+            eapply ${PATCHES}
+        fi
+    fi
+    eapply_user
+}
+__eapi6_src_install() {
+    if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
+        emake DESTDIR="${D}" install || die "emake install failed"
+    fi
+    einstalldocs
+}
+__eapi8_src_prepare() {
+    if [[ -n ${PATCHES+set} ]]; then
+        if [[ ${PATCHES@a} == *a* ]]; then
+            [[ ${#PATCHES[@]} -gt 0 ]] && eapply -- "${PATCHES[@]}"
+        elif [[ -n ${PATCHES} ]]; then
+            eapply -- ${PATCHES}
+        fi
+    fi
+    eapply_user
+}
+nonfatal() { "$@"; }
+assert() {
+    (( $? == 0 )) && return
+    local x
+    for x in "${PIPESTATUS[@]}"; do
+        (( x == 0 )) && continue
+        [[ $# -gt 0 ]] && die "$@" || die "assert: command failed"
+    done
+}
+unpack() { die "unpack: not yet implemented (P4)"; }
+eapply() {
+    local f
+    for f in "$@"; do
+        [[ ${f} == --  ]] && continue
+        patch -p1 < "${f}" || die "eapply: patch failed: ${f}"
+    done
+}
+eapply_user() { :; }
+einstalldocs() { :; }
+get_libdir() { echo "lib64"; }
+"#;
+
 /// An embedded bash shell for sourcing ebuilds, eclasses, and `make.defaults`.
 ///
 /// Wraps [`brush_core::Shell`] configured for Gentoo ebuild evaluation.
@@ -205,6 +293,46 @@ impl EbuildShell {
         ] {
             shell.register_builtin(name, builtin);
         }
+
+        // Register 74 ___eapi_* EAPI predicate builtins (portage eapi.sh).
+        for &name in pms_builtins::EAPI_PREDICATE_NAMES {
+            shell.register_builtin(
+                name,
+                brush_core::builtins::builtin::<pms_builtins::EapiPredicateCommand, _>(),
+            );
+        }
+
+        // Register phase-setup builtin (__ebuild_phase_funcs).
+        shell.register_builtin(
+            "__ebuild_phase_funcs",
+            brush_core::builtins::builtin::<pms_builtins::EbuildPhaseFuncsCommand, _>(),
+        );
+
+        // Register P1 output helper builtins (einfo, ewarn, …).
+        for &name in &["einfo", "elog", "ewarn", "eerror", "eqawarn", "einfon"] {
+            shell.register_builtin(
+                name,
+                brush_core::builtins::builtin::<pms_builtins::EchoMessageCommand, _>(),
+            );
+        }
+        shell.register_builtin(
+            "ebegin",
+            brush_core::builtins::builtin::<pms_builtins::EbeginCommand, _>(),
+        );
+        shell.register_builtin(
+            "eend",
+            brush_core::builtins::builtin::<pms_builtins::EendCommand, _>(),
+        );
+
+        // Register P2 build helper builtins (emake, econf).
+        shell.register_builtin(
+            "emake",
+            brush_core::builtins::builtin::<pms_builtins::EmakeCommand, _>(),
+        );
+        shell.register_builtin(
+            "econf",
+            brush_core::builtins::builtin::<pms_builtins::EconfCommand, _>(),
+        );
 
         // Register PMS 12.3.14 version manipulation builtins.
         // ver_cut and ver_test are Rust builtins to avoid bash arithmetic
@@ -478,28 +606,27 @@ impl EbuildShell {
         dirs.pop()
     }
 
-    /// Source portage's bash function libraries and set up the build environment.
+    /// Set up the build environment.
     ///
-    /// Sets `PORTAGE_BIN_PATH`, prepends `ebuild-helpers/` to `PATH`, configures
-    /// a writable `DISTDIR`, passes through build-tool variables (`CFLAGS`,
-    /// `MAKEOPTS`, …) from the caller's environment, and sources:
+    /// Prepends portage's `ebuild-helpers/` to `PATH` (for `doins`, `dosbin`, …),
+    /// configures a writable `DISTDIR`, passes through build-tool variables
+    /// (`CFLAGS`, `MAKEOPTS`, …) from the caller's environment, and defines
+    /// the per-EAPI default phase implementation bash functions
+    /// (`__eapi0_src_unpack`, `__eapi2_src_compile`, …) that `__ebuild_phase_funcs`
+    /// wires together.
     ///
-    /// - `isolated-functions.sh` — `einfo`, `ewarn`, `eerror`, `ebegin`, `eend`, `die`, …
-    /// - `phase-functions.sh`   — `__ebuild_phase_funcs`, default phase implementations
-    /// - `phase-helpers.sh`     — `econf`, `unpack`, `insinto`, `into`, `use_enable`, …
-    ///
-    /// Failures to source individual files are warned rather than fatal so the
-    /// caller can still attempt to run phases against a partial environment.
+    /// The output helpers (`einfo`, `ewarn`, …), predicates (`___eapi_*`),
+    /// `emake`, `econf`, and `__ebuild_phase_funcs` are registered as Rust
+    /// builtins in `new_with_cache` and therefore never sourced from portage.
     pub async fn init_build_env(&mut self) -> Result<()> {
-        let bin_path = Self::find_portage_bin_path()
-            .ok_or_else(|| Error::Shell("portage not found under /usr/lib/portage".to_string()))?;
-
-        self.set_var("PORTAGE_BIN_PATH", &bin_path.to_string_lossy());
-
-        // Prepend ebuild-helpers to PATH so do*, new*, e* commands resolve.
-        let helpers = bin_path.join("ebuild-helpers");
-        let cur_path = std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
-        self.set_var("PATH", &format!("{}:{cur_path}", helpers.display()));
+        // Prepend portage's ebuild-helpers to PATH for do*/new* install helpers.
+        if let Some(bin_path) = Self::find_portage_bin_path() {
+            self.set_var("PORTAGE_BIN_PATH", &bin_path.to_string_lossy());
+            let helpers = bin_path.join("ebuild-helpers");
+            let cur_path =
+                std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string());
+            self.set_var("PATH", &format!("{}:{cur_path}", helpers.display()));
+        }
 
         // Writable DISTDIR: honour env override, fall back to ~/.cache/distfiles.
         let distdir = std::env::var("DISTDIR").unwrap_or_else(|_| {
@@ -511,27 +638,27 @@ impl EbuildShell {
 
         // Pass through build-tool variables from the caller's environment.
         for var in &[
-            "MAKEOPTS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS",
-            "CC", "CXX", "AR", "RANLIB", "NM", "STRIP", "PKG_CONFIG",
+            "MAKEOPTS", "CFLAGS", "CXXFLAGS", "CPPFLAGS", "LDFLAGS", "CC", "CXX", "AR",
+            "RANLIB", "NM", "STRIP", "PKG_CONFIG",
         ] {
             if let Ok(val) = std::env::var(var) {
                 self.set_var(var, &val);
             }
         }
 
-        // Source portage's function libraries in the same order as ebuild.sh.
-        let params = self.shell.default_exec_params();
-        for lib in &["isolated-functions.sh", "phase-functions.sh", "phase-helpers.sh"] {
-            let path = bin_path.join(lib);
-            if path.exists() {
-                if let Err(e) = self.shell
-                    .source_script(path.as_path(), std::iter::empty::<&str>(), &params)
-                    .await
-                {
-                    eprintln!("warning: could not source {lib}: {e}");
-                }
-            }
-        }
+        // Remove bash stub no-ops that were installed for metadata extraction.
+        // These stubs shadow the Rust builtins for econf, emake, einfo, etc.
+        // Unsetting them lets the Rust builtin registry take over during build.
+        self.run_string(
+            "unset -f econf emake einfo einfon elog ewarn eerror eqawarn ebegin eend nonfatal",
+        )
+        .await
+        .ok();
+
+        // Define per-EAPI default phase implementations as bash functions.
+        // These are called by __ebuild_phase_funcs (a Rust builtin) to set up
+        // default() and default_<phase>() for the currently executing phase.
+        self.run_string(PHASE_DEFAULT_FUNCTIONS).await?;
 
         Ok(())
     }
@@ -676,16 +803,19 @@ impl EbuildShell {
 
         // Wire up `default` and any missing EAPI default implementations
         // (e.g. src_compile → __eapi2_src_compile) for the current phase.
-        if self.shell.funcs().get("__ebuild_phase_funcs").is_some() {
-            self.run_string(&format!(
-                "__ebuild_phase_funcs {eapi} {func_name}"
-            ))
+        // __ebuild_phase_funcs is a Rust builtin (not in funcs()), always run it.
+        self.run_string(&format!("__ebuild_phase_funcs {eapi} {func_name}"))
             .await
             .ok();
-        }
 
-        // Run the phase function if it is defined; warn otherwise.
-        if self.shell.funcs().get(func_name).is_some() {
+        // Change working directory to $S (the package source directory) so
+        // that phase functions and spawned build tools see the right CWD.
+        self.run_string("cd \"${S}\" 2>/dev/null || true").await.ok();
+
+        // Run the phase function (may have been defined by the ebuild or by
+        // __ebuild_phase_funcs as a fallback calling default()).
+        let phase_defined = self.shell.funcs().get(func_name).is_some();
+        if phase_defined {
             self.run_string(func_name).await?;
         } else {
             eprintln!("warning: {func_name} not defined, nothing to do");
