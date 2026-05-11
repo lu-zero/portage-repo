@@ -5,14 +5,6 @@
 //! comparison with:
 //!
 //!   pk repo metadata regen -p <cache-dir> -n -f -j <N> <repo>
-//!
-//! Usage:
-//!   regen_only <repo-path> [filter] [-o <cache-dir>] [-j <N>]
-//!
-//! Examples:
-//!   regen_only gentoo
-//!   regen_only gentoo 'dev-util/*'
-//!   regen_only gentoo -o /tmp/portage-cache -j 12
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -23,7 +15,6 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -31,12 +22,28 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use brush_parser::ast::Program;
+use clap::Parser;
 use portage_metadata::CacheEntry;
 use portage_repo::{Ebuild, Repository};
 
 type EclassAstCache = Arc<papaya::HashMap<String, Program>>;
 
 type EclassChecksumCache = Arc<Mutex<HashMap<PathBuf, md5::Digest>>>;
+
+#[derive(Parser)]
+#[command(about = "Source all ebuilds and optionally write an md5-cache")]
+struct Args {
+    /// Path to the repository
+    repo: String,
+    /// Optional category/package glob filter (e.g. 'dev-util/*')
+    filter: Option<String>,
+    /// Write cache files to this directory
+    #[arg(short = 'o', long, value_name = "DIR")]
+    output: Option<PathBuf>,
+    /// Number of parallel workers (default: available CPUs)
+    #[arg(short = 'j', long)]
+    jobs: Option<usize>,
+}
 
 fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, String> {
     {
@@ -56,23 +63,19 @@ fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, S
 }
 
 /// Check whether an ebuild matches a glob-like filter (`cat/*` or `cat/pkg-ver`).
-///
-/// Uses `category()` to short-circuit before allocating a CPV string.
 fn matches_filter(ebuild: &Ebuild, filter: &str) -> bool {
     if filter.is_empty() {
         return true;
     }
-    // Fast path: check category without allocating.
     let cat_end = filter.find('/').unwrap_or(filter.len());
     let filter_cat = &filter[..cat_end];
     if ebuild.category() != filter_cat {
         return false;
     }
-    let rest = &filter[cat_end..]; // "/" or "/pkg*" or ""
+    let rest = &filter[cat_end..];
     if rest == "/" || rest.ends_with("/*") && rest.len() == 2 {
-        return true; // "cat/*"
+        return true;
     }
-    // Fall back to full string for sub-package filters (rare).
     let cpv = ebuild.cpv().to_string();
     if let Some(prefix) = filter.strip_suffix('*') {
         cpv.starts_with(prefix)
@@ -101,12 +104,9 @@ async fn process_ebuild(
         .map_err(|e| format!("source: {e}"))?;
 
     if let Some(dir) = out_dir {
-        // Compute MD5 of the ebuild file itself.
         let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
         let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
 
-        // Compute MD5 checksums for each transitively inherited eclass.
-        // Results are cached across workers so each eclass is hashed once.
         let eclasses = metadata
             .inherited
             .iter()
@@ -139,52 +139,15 @@ async fn main() {
     #[cfg(feature = "dhat-heap")]
     let _dhat = dhat::Profiler::new_heap();
 
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!(
-            "Usage: {} <repo-path> [filter] [-o <cache-dir>] [-j <N>]",
-            args[0]
-        );
-        eprintln!();
-        eprintln!("Examples:");
-        eprintln!("  {} gentoo", args[0]);
-        eprintln!("  {} gentoo 'dev-util/*'", args[0]);
-        eprintln!("  {} gentoo -o /tmp/portage-cache -j 12", args[0]);
-        process::exit(2);
-    }
+    let args = Args::parse();
 
-    let repo_path = &args[1];
-    let mut filter: Option<String> = None;
-    let mut out_dir: Option<PathBuf> = None;
-    let mut jobs: usize = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let jobs = args.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
 
-    let mut i = 2;
-    while i < args.len() {
-        match args[i].as_str() {
-            "-o" | "--output" => {
-                i += 1;
-                if i < args.len() {
-                    out_dir = Some(PathBuf::from(&args[i]));
-                }
-            }
-            "-j" | "--jobs" => {
-                i += 1;
-                if i < args.len() {
-                    jobs = args[i].parse().unwrap_or(jobs);
-                }
-            }
-            _ => {
-                if filter.is_none() {
-                    filter = Some(args[i].clone());
-                }
-            }
-        }
-        i += 1;
-    }
-
-    let repo = match Repository::open(repo_path) {
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repo: {e}");
@@ -200,19 +163,20 @@ async fn main() {
         }
     };
 
-    if let Some(ref f) = filter {
+    if let Some(ref f) = args.filter {
         ebuilds.retain(|eb| matches_filter(eb, f));
     }
 
     let total = ebuilds.len();
-    let filter_desc = filter
+    let filter_desc = args
+        .filter
         .as_ref()
         .map(|f| format!(" (filter: {f})"))
         .unwrap_or_default();
     eprintln!(
         "Sourcing {total} ebuilds with {jobs} workers{}{}...",
         filter_desc,
-        out_dir
+        args.output
             .as_ref()
             .map(|p| format!(", writing to {}", p.display()))
             .unwrap_or_default()
@@ -220,13 +184,11 @@ async fn main() {
 
     let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
     let repo = Arc::new(repo);
-    let out_dir = Arc::new(out_dir);
+    let out_dir = Arc::new(args.output);
     let errors = Arc::new(AtomicUsize::new(0));
     let eclass_cache: EclassChecksumCache = Arc::new(Mutex::new(HashMap::new()));
     let ast_cache: EclassAstCache = Arc::new(papaya::HashMap::new());
 
-    // Pre-parse all eclasses into the shared cache before spawning workers so
-    // every worker gets 100% cache hits with no concurrent insert races.
     {
         let shell = repo
             .shell_with_masters_and_cache(&[], Arc::clone(&ast_cache))

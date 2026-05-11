@@ -17,29 +17,22 @@
 //! |                                               | by implementation, ignored here)  |
 //!
 //! Non-PMS / implementation fields excluded: INHERIT, INHERITED, _md5_.
-//!
-//! Usage:
-//! ```text
-//! cargo run --release --example compare_caches -- <dir-a> <dir-b> [--jobs N]
-//! ```
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use clap::Parser;
 use portage_atom::DepEntry;
 use portage_metadata::SrcUriEntry;
 
 // ── Field classification ──────────────────────────────────────────────────────
 
-/// Fields compared with exact string equality.
 const EXACT_FIELDS: &[&str] = &["EAPI", "DESCRIPTION", "SLOT", "HOMEPAGE"];
 
-/// Fields compared as unordered token sets (duplicates matter: multiset).
 const SET_FIELDS: &[&str] = &["IUSE", "KEYWORDS", "DEFINED_PHASES"];
 
-/// Dep-spec fields compared via `DepEntry::parse` + recursive sort.
 const DEP_FIELDS: &[&str] = &[
     "DEPEND",
     "RDEPEND",
@@ -52,8 +45,21 @@ const DEP_FIELDS: &[&str] = &[
     "REQUIRED_USE",
 ];
 
-/// Implementation / non-PMS fields excluded from comparison.
 const EXCLUDE_FIELDS: &[&str] = &["INHERIT", "INHERITED", "_md5_"];
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[command(about = "Compare two md5-cache directories field by field")]
+struct Args {
+    /// First cache directory
+    dir_a: PathBuf,
+    /// Second cache directory
+    dir_b: PathBuf,
+    /// Number of parallel workers (default: available CPUs)
+    #[arg(short = 'j', long)]
+    jobs: Option<usize>,
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -61,8 +67,6 @@ fn token_set(s: &str) -> BTreeSet<&str> {
     s.split_whitespace().collect()
 }
 
-/// Parse `_eclasses_=` value (tab-separated name\thash pairs) into a sorted
-/// set of eclass names, ignoring checksums (which differ by implementation).
 fn eclasses_name_set(val: &str) -> BTreeSet<String> {
     let parts: Vec<&str> = val.split('\t').collect();
     parts
@@ -77,8 +81,6 @@ fn eclasses_name_set(val: &str) -> BTreeSet<String> {
         .collect()
 }
 
-/// Canonical serialization of a `SrcUriEntry` list: entries sorted, groups
-/// recursively sorted, so that insertion-order differences don't show as diffs.
 fn normalize_src_uri(entries: &[SrcUriEntry]) -> String {
     let mut parts: Vec<String> = entries.iter().map(normalize_src_entry).collect();
     parts.sort();
@@ -119,10 +121,6 @@ fn normalize_src_entry(e: &SrcUriEntry) -> String {
     }
 }
 
-/// Canonical serialization of a `DepEntry` list: children sorted at every
-/// level, so insertion-order differences don't show as diffs.
-///
-/// PMS dep-spec lists are set-based (order is irrelevant), so sorting is safe.
 fn normalize_dep_entries(entries: &[DepEntry]) -> String {
     let mut parts: Vec<String> = entries.iter().map(normalize_dep_entry).collect();
     parts.sort();
@@ -188,10 +186,8 @@ fn compare_cache_entries(
     map_b: &BTreeMap<String, String>,
 ) -> Vec<FileDiff> {
     let mut diffs = Vec::new();
-
     let empty = String::new();
 
-    // Exact fields
     for &key in EXACT_FIELDS {
         let va = map_a.get(key).unwrap_or(&empty);
         let vb = map_b.get(key).unwrap_or(&empty);
@@ -205,7 +201,6 @@ fn compare_cache_entries(
         }
     }
 
-    // Token-set fields
     for &key in SET_FIELDS {
         let va = map_a.get(key).unwrap_or(&empty);
         let vb = map_b.get(key).unwrap_or(&empty);
@@ -219,7 +214,6 @@ fn compare_cache_entries(
         }
     }
 
-    // Dep-spec fields: structural parse via DepEntry, sorted for order-independence
     for &key in DEP_FIELDS {
         let va = map_a.get(key).unwrap_or(&empty);
         let vb = map_b.get(key).unwrap_or(&empty);
@@ -235,7 +229,6 @@ fn compare_cache_entries(
         }
     }
 
-    // SRC_URI: structural parse via SrcUriEntry, sorted for order-independence
     {
         let va = map_a.get("SRC_URI").unwrap_or(&empty);
         let vb = map_b.get("SRC_URI").unwrap_or(&empty);
@@ -255,7 +248,6 @@ fn compare_cache_entries(
         }
     }
 
-    // _eclasses_: compare name sets, ignore checksums
     {
         let va = map_a.get("_eclasses_").unwrap_or(&empty);
         let vb = map_b.get("_eclasses_").unwrap_or(&empty);
@@ -269,7 +261,6 @@ fn compare_cache_entries(
         }
     }
 
-    // Warn about unknown fields present in one but not the other
     let known: BTreeSet<&str> = EXACT_FIELDS
         .iter()
         .chain(SET_FIELDS)
@@ -318,44 +309,16 @@ fn collect_entries(dir: &Path) -> BTreeMap<String, PathBuf> {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
 
-    let mut dir_a: Option<PathBuf> = None;
-    let mut dir_b: Option<PathBuf> = None;
-    let mut jobs: usize = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let jobs = args.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
 
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--jobs" | "-j" => {
-                i += 1;
-                if i < args.len() {
-                    jobs = args[i].parse().unwrap_or(jobs);
-                }
-            }
-            _ => {
-                if dir_a.is_none() {
-                    dir_a = Some(PathBuf::from(&args[i]));
-                } else if dir_b.is_none() {
-                    dir_b = Some(PathBuf::from(&args[i]));
-                }
-            }
-        }
-        i += 1;
-    }
-
-    let (dir_a, dir_b) = match (dir_a, dir_b) {
-        (Some(a), Some(b)) => (a, b),
-        _ => {
-            eprintln!("Usage: compare_caches <dir-a> <dir-b> [--jobs N]");
-            std::process::exit(2);
-        }
-    };
-
-    let entries_a = collect_entries(&dir_a);
-    let entries_b = collect_entries(&dir_b);
+    let entries_a = collect_entries(&args.dir_a);
+    let entries_b = collect_entries(&args.dir_b);
 
     let only_a: Vec<String> = entries_a
         .keys()
@@ -380,7 +343,6 @@ fn main() {
         only_b.len()
     );
 
-    // Report missing entries
     for cpv in &only_a {
         eprintln!("ONLY-A: {cpv}");
     }
@@ -388,7 +350,6 @@ fn main() {
         eprintln!("ONLY-B: {cpv}");
     }
 
-    // Parallel comparison via flume
     let (tx, rx) = flume::bounded::<(String, PathBuf, PathBuf)>(jobs * 4);
     let progress = Arc::new(AtomicUsize::new(0));
 

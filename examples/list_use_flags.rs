@@ -1,27 +1,30 @@
 //! List all USE flags and their descriptions from a repository.
 //!
-//! Usage:
-//!   cargo run --example list_use_flags -- [path/to/repo]
-//!
 //! Prints three sections:
 //!   1. Global USE flags (profiles/use.desc)
 //!   2. USE_EXPAND groups and their values (profiles/desc/*.desc)
 //!   3. Per-package USE flags collected from every metadata.xml
 
 use std::collections::BTreeMap;
-use std::env;
 
+use clap::Parser;
 use portage_repo::Repository;
 
-fn main() {
-    let path = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/var/db/repos/gentoo".to_string());
+#[derive(Parser)]
+#[command(about = "List all USE flags and their descriptions from a repository")]
+struct Args {
+    /// Path to the repository
+    #[arg(default_value = "/var/db/repos/gentoo")]
+    repo: String,
+}
 
-    let repo = match Repository::open(&path) {
+fn main() {
+    let args = Args::parse();
+
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error opening repository at {path}: {e}");
+            eprintln!("Error opening repository at {}: {e}", args.repo);
             std::process::exit(1);
         }
     };
@@ -75,7 +78,6 @@ fn main() {
     // ── 3. Per-package USE flags from metadata.xml ───────────────────────────
     println!("=== Per-package USE flags (metadata.xml) ===");
 
-    // Collect into BTreeMap<cpn_string, BTreeMap<flag, desc>> so output is sorted.
     let mut pkg_flags: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut xml_errors = 0usize;
 
@@ -108,7 +110,6 @@ fn main() {
     let total_pkg_flags: usize = pkg_flags.values().map(|m| m.len()).sum();
     for (cpn, flags) in &pkg_flags {
         println!("  [{cpn}]");
-        // Group flags by USE_EXPAND prefix; truly global flags are shown flat.
         let groups = expand.group(flags.keys().map(String::as_str));
         for (group, values) in &groups {
             if *group == "global" {

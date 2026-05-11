@@ -1,18 +1,20 @@
-//! Standalone demo of the PMS 12.3.14 version functions built into
-//! portage-repo's embedded bash shell: `ver_cut`, `ver_rs`, `ver_test`.
+//! Demo of the PMS 12.3.14 version functions: `ver_cut`, `ver_rs`, `ver_test`.
 //!
 //! These are Rust builtins registered by [`EbuildShell`] — no real repository
 //! or ebuild is needed to exercise them.
-//!
-//! ```text
-//! cargo run --example ver_funcs
-//! cargo run --example ver_funcs -- 3.12.14_rc1-r2
-//! ```
 
-use std::env;
 use std::process;
 
+use clap::Parser;
 use portage_repo::{EbuildShell, Repository};
+
+#[derive(Parser)]
+#[command(about = "Demo the PMS version functions: ver_cut, ver_rs, ver_test")]
+struct Args {
+    /// Version string to exercise
+    #[arg(default_value = "7.1.3_rc2-r4")]
+    version: String,
+}
 
 /// Run `expr` in the shell via `$()` substitution; return the captured output.
 async fn capture(sh: &mut EbuildShell, expr: &str) -> String {
@@ -30,9 +32,8 @@ async fn ver_test(sh: &mut EbuildShell, args: &str) -> bool {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let ver = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "7.1.3_rc2-r4".to_string());
+    let args = Args::parse();
+    let ver = args.version;
 
     // Build a throwaway shell — ver_* builtins need no real repository content.
     let tmp = tempfile::tempdir().expect("create tempdir");

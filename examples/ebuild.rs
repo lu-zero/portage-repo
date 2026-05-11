@@ -4,85 +4,38 @@
 //! requested phase function.  Build directories are created under a temporary
 //! location (or a path you specify with `--work-dir`).
 //!
-//! # Usage
-//!
-//! ```text
-//! cargo run --example ebuild -- <repo-path> <category/package-version> <phase> [options]
-//! ```
-//!
-//! # Phases
-//!
-//! pretend, setup, unpack, prepare, configure, compile, test, install,
+//! Phases: pretend, setup, unpack, prepare, configure, compile, test, install,
 //! preinst, postinst, prerm, postrm, nofetch, info, config
-//!
-//! # Options
-//!
-//! ```text
-//! --use flag1 flag2 …   Set active USE flags (default: none)
-//! --work-dir <path>     Use this directory for WORKDIR/T/D (default: /tmp/portage/<cpv>)
-//! ```
-//!
-//! # Examples
-//!
-//! ```text
-//! cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.1 compile
-//! cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.1 install --work-dir /tmp/hello-build
-//! cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.1 setup --use nls
-//! ```
 
-use std::env;
 use std::path::PathBuf;
 use std::process;
 
+use clap::Parser;
 use portage_atom::Cpv;
 use portage_repo::Repository;
 
+#[derive(Parser)]
+#[command(about = "Run a single ebuild phase")]
+struct Args {
+    /// Path to the repository
+    repo: String,
+    /// Package atom, e.g. app-misc/hello-2.12.1
+    cpv: String,
+    /// Phase to execute (configure, compile, install, …)
+    phase: String,
+    /// Active USE flags
+    #[arg(long, num_args = 1.., value_name = "FLAG")]
+    r#use: Vec<String>,
+    /// Directory to use for WORKDIR/T/D
+    #[arg(long, value_name = "PATH")]
+    work_dir: Option<PathBuf>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 4 {
-        eprintln!(
-            "Usage: {} <repo-path> <category/package-version> <phase> [--use flags...] [--work-dir path]",
-            args[0]
-        );
-        eprintln!();
-        eprintln!("Phases: pretend setup unpack prepare configure compile test install");
-        eprintln!("        preinst postinst prerm postrm nofetch info config");
-        process::exit(2);
-    }
+    let args = Args::parse();
 
-    let repo_path = &args[1];
-    let cpv_str = &args[2];
-    let phase = &args[3];
-
-    // Parse optional flags
-    let mut use_flags: Vec<&str> = Vec::new();
-    let mut work_dir: Option<PathBuf> = None;
-    let mut i = 4;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--use" => {
-                i += 1;
-                while i < args.len() && !args[i].starts_with("--") {
-                    use_flags.push(&args[i]);
-                    i += 1;
-                }
-            }
-            "--work-dir" => {
-                i += 1;
-                if i < args.len() {
-                    work_dir = Some(PathBuf::from(&args[i]));
-                    i += 1;
-                }
-            }
-            other => {
-                eprintln!("Unknown option: {other}");
-                process::exit(2);
-            }
-        }
-    }
-
-    let repo = match Repository::open(repo_path) {
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repository: {e}");
@@ -90,10 +43,10 @@ async fn main() {
         }
     };
 
-    let cpv = match Cpv::parse(cpv_str) {
+    let cpv = match Cpv::parse(&args.cpv) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Invalid atom {cpv_str}: {e}");
+            eprintln!("Invalid atom {}: {e}", args.cpv);
             process::exit(1);
         }
     };
@@ -118,7 +71,7 @@ async fn main() {
     let ebuild = match package.ebuild(&version_str) {
         Ok(Some(e)) => e,
         Ok(None) => {
-            eprintln!("Ebuild {cpv_str} not found");
+            eprintln!("Ebuild {} not found", args.cpv);
             process::exit(1);
         }
         Err(e) => {
@@ -127,17 +80,16 @@ async fn main() {
         }
     };
 
-    // Determine work root: explicit flag, or $TMPDIR/portage/<cat>/<pf>
-    let work_root = work_dir.unwrap_or_else(|| {
-        let tmp = env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+    let work_root = args.work_dir.unwrap_or_else(|| {
+        let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
         let pf = format!("{}-{}", cpv.cpn.package, cpv.version);
         PathBuf::from(format!("{tmp}/portage/{}/{pf}", cpv.cpn.category))
     });
 
     eprintln!(
         ">>> Running phase '{}' for {} in {}",
-        phase,
-        cpv_str,
+        args.phase,
+        args.cpv,
         work_root.display()
     );
 
@@ -149,20 +101,21 @@ async fn main() {
         }
     };
 
-    if !use_flags.is_empty() {
-        if let Err(e) = shell.set_use_flags(&use_flags) {
+    if !args.r#use.is_empty() {
+        let flags: Vec<&str> = args.r#use.iter().map(String::as_str).collect();
+        if let Err(e) = shell.set_use_flags(&flags) {
             eprintln!("Error setting USE flags: {e}");
             process::exit(1);
         }
-        eprintln!(">>> USE={}", use_flags.join(" "));
+        eprintln!(">>> USE={}", args.r#use.join(" "));
     }
 
-    match shell.run_phase(&ebuild, phase, &work_root).await {
+    match shell.run_phase(&ebuild, &args.phase, &work_root).await {
         Ok(()) => {
-            eprintln!(">>> Phase '{phase}' completed successfully");
+            eprintln!(">>> Phase '{}' completed successfully", args.phase);
         }
         Err(e) => {
-            eprintln!("!!! Phase '{phase}' failed: {e}");
+            eprintln!("!!! Phase '{}' failed: {e}", args.phase);
             process::exit(1);
         }
     }

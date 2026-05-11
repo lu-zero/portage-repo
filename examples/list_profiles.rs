@@ -1,38 +1,29 @@
 //! List and inspect profiles from a repository.
 //!
-//! # Usage
-//!
-//! ```
-//! # List all profiles, grouped by architecture
-//! cargo run --example list_profiles -- gentoo
-//!
-//! # Filter to one architecture
-//! cargo run --example list_profiles -- gentoo amd64
-//!
-//! # Full detail for a specific profile (path contains '/')
-//! cargo run --example list_profiles -- gentoo default/linux/amd64/23.0
-//! ```
-//!
-//! When a profile path is given the stack is resolved and `make.defaults`
-//! is sourced through the embedded shell so the fully-expanded USE flag
-//! list (after force/mask) is shown.
+//! When a profile path (containing `/`) is given as the filter, the full
+//! inheritance stack is resolved and `make.defaults` is sourced so the
+//! fully-expanded USE flag list (after force/mask) is shown.
 
-use std::env;
 use std::process;
 
+use clap::Parser;
 use portage_repo::{Repository, UseExpand};
+
+#[derive(Parser)]
+#[command(about = "List and inspect profiles from a repository")]
+struct Args {
+    /// Path to the repository
+    repo: String,
+    /// Architecture keyword or profile path to filter/inspect
+    #[arg(name = "arch-or-profile")]
+    filter: Option<String>,
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} <repo-path> [arch | profile/path]", args[0]);
-        process::exit(2);
-    }
-    let repo_path = &args[1];
-    let filter = args.get(2).map(String::as_str);
+    let args = Args::parse();
 
-    let repo = match Repository::open(repo_path) {
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repository: {e}");
@@ -47,6 +38,8 @@ async fn main() {
             process::exit(1);
         }
     };
+
+    let filter = args.filter.as_deref();
 
     // If the filter contains '/' it is a profile path — run full inspect.
     if let Some(path) = filter.filter(|s| s.contains('/')) {
@@ -69,7 +62,7 @@ async fn main() {
         }
     }
 
-    // Otherwise: list profiles, optionally filtered by arch.
+    // List profiles, optionally filtered by arch.
     let profiles: Vec<_> = all_profiles
         .iter()
         .filter(|p| filter.is_none_or(|arch| p.arch() == arch))
@@ -80,7 +73,6 @@ async fn main() {
         process::exit(1);
     }
 
-    // Group by arch for display.
     let mut current_arch = String::new();
     for desc in &profiles {
         let arch_str = desc.arch().to_string();
@@ -91,7 +83,6 @@ async fn main() {
 
         let status = desc.status().to_string();
 
-        // Resolve the stack to get depth and basic stats (no shell needed).
         match repo.profile_stack(desc.path()) {
             Ok(stack) => {
                 let depth = stack.profiles().len();
@@ -132,14 +123,12 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
         }
     };
 
-    // Build the grouper once from the repository's USE_EXPAND groups.
     let expand = repo.use_expand().unwrap_or_default();
 
     println!("Profile:    {profile_path}");
     println!("Deprecated: {}", stack.is_deprecated());
     println!();
 
-    // ── Inheritance chain ─────────────────────────────────────────────────
     println!(
         "=== Inheritance chain ({} profiles) ===",
         stack.profiles().len()
@@ -149,13 +138,11 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
     }
     println!();
 
-    // ── use.force / use.mask ──────────────────────────────────────────────
     print_use_set("use.force", stack.use_force(), &expand);
     print_use_set("use.mask", stack.use_mask(), &expand);
     print_use_set("use.stable.force", stack.use_stable_force(), &expand);
     print_use_set("use.stable.mask", stack.use_stable_mask(), &expand);
 
-    // ── System packages ───────────────────────────────────────────────────
     if let Ok(pkgs) = stack.packages() {
         let sys: Vec<_> = pkgs.iter().filter(|(s, _)| *s).map(|(_, d)| d).collect();
         if !sys.is_empty() {
@@ -167,7 +154,6 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
         }
     }
 
-    // ── Package masks ─────────────────────────────────────────────────────
     if let Ok(masks) = stack.package_mask() {
         if !masks.is_empty() {
             println!("=== package.mask ({} atoms) ===", masks.len());
@@ -181,7 +167,6 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
         }
     }
 
-    // ── Resolved USE flags (requires shell + make.defaults) ───────────────
     println!("=== Resolved USE flags (after make.defaults + force/mask) ===");
     let mut shell = match repo.shell().await {
         Ok(s) => s,
@@ -197,8 +182,6 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
                 .split_whitespace()
                 .map(str::to_string)
                 .collect();
-            // For resolved flags prefer the profile's own $USE_EXPAND, which
-            // may include groups not present in profiles/desc/*.desc.
             let shell_expand =
                 UseExpand::from_var(&shell.get_var("USE_EXPAND").unwrap_or_default());
             let groups = shell_expand.group(flags.iter().map(String::as_str));
@@ -212,7 +195,6 @@ async fn inspect_profile(repo: &Repository, profile_path: &str) {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Print a USE flag set (force/mask/etc.) grouped by USE_EXPAND, if non-empty.
 fn print_use_set(name: &str, result: portage_repo::Result<Vec<String>>, expand: &UseExpand) {
     let Ok(flags) = result else { return };
     if flags.is_empty() {
@@ -223,8 +205,6 @@ fn print_use_set(name: &str, result: portage_repo::Result<Vec<String>>, expand: 
     print_grouped(&groups);
 }
 
-/// Print a grouped flag map: one `[group]  val val val` line per group,
-/// wrapping at 100 columns with aligned continuation lines.
 fn print_grouped<K: AsRef<str>, S: AsRef<str>>(groups: &std::collections::BTreeMap<K, Vec<S>>)
 where
     K: std::fmt::Display,
@@ -233,13 +213,11 @@ where
     for (group, values) in groups {
         let mut values: Vec<&str> = values.iter().map(S::as_ref).collect();
         values.sort();
-        // "  [group]" prefix; continuation lines are indented to match.
         let header = format!("  [{group}]");
         let indent = " ".repeat(header.len());
         print!("{header}");
         let mut col = header.len();
         for value in &values {
-            // +1 for the separating space
             if col > header.len() && col + 1 + value.len() > MAX_WIDTH {
                 println!();
                 print!("{indent}");

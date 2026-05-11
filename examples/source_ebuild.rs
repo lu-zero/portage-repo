@@ -1,38 +1,25 @@
 //! Source a single ebuild through the embedded bash shell and print the
 //! extracted PMS metadata variables.
-//!
-//! # Usage
-//!
-//! ```text
-//! cargo run --example source_ebuild -- <repo-path> <category/package-version>
-//! ```
-//!
-//! # Example
-//!
-//! ```text
-//! cargo run --example source_ebuild -- gentoo dev-lang/rust-1.75.0
-//! ```
 
-use std::env;
 use std::process;
 
+use clap::Parser;
 use portage_repo::Repository;
+
+#[derive(Parser)]
+#[command(about = "Source an ebuild and print its extracted PMS metadata")]
+struct Args {
+    /// Path to the repository
+    repo: String,
+    /// Package atom, e.g. dev-lang/rust-1.75.0
+    cpv: String,
+}
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <repo-path> <category/package-version>", args[0]);
-        eprintln!(
-            "Example: {} /var/db/repos/gentoo dev-lang/rust-1.75.0",
-            args[0]
-        );
-        process::exit(2);
-    }
-    let repo_path = &args[1];
-    let cpv_str = &args[2];
+    let args = Args::parse();
 
-    let repo = match Repository::open(repo_path) {
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Error opening repository: {e}");
@@ -40,11 +27,10 @@ async fn main() {
         }
     };
 
-    // Parse the cpv to locate the ebuild
-    let cpv = match portage_atom::Cpv::parse(cpv_str) {
+    let cpv = match portage_atom::Cpv::parse(&args.cpv) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Invalid atom {cpv_str}: {e}");
+            eprintln!("Invalid atom {}: {e}", args.cpv);
             process::exit(1);
         }
     };
@@ -72,7 +58,7 @@ async fn main() {
     let ebuild = match package.ebuild(&version_str) {
         Ok(Some(e)) => e,
         Ok(None) => {
-            eprintln!("Ebuild {cpv_str} not found");
+            eprintln!("Ebuild {} not found", args.cpv);
             process::exit(1);
         }
         Err(e) => {
@@ -84,7 +70,6 @@ async fn main() {
     println!("Sourcing {}", ebuild.path());
     println!();
 
-    // Create the shell and source the ebuild
     let mut shell = match repo.shell().await {
         Ok(s) => s,
         Err(e) => {
@@ -101,7 +86,6 @@ async fn main() {
         }
     };
 
-    // Print extracted metadata
     println!("EAPI:         {}", metadata.eapi);
     println!("DESCRIPTION:  {}", metadata.description);
     println!("SLOT:         {}", metadata.slot);

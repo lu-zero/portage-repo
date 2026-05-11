@@ -1,27 +1,24 @@
 //! Print a summary of a repository's contents: category / package / ebuild
 //! counts, plus eclass and license totals.
-//!
-//! # Usage
-//!
-//! ```text
-//! cargo run --example enumerate_repo -- [path/to/repo]
-//! ```
-//!
-//! Defaults to `/var/db/repos/gentoo` when no path is given.
 
-use std::env;
-
+use clap::Parser;
 use portage_repo::Repository;
 
-fn main() {
-    let path = env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/var/db/repos/gentoo".to_string());
+#[derive(Parser)]
+#[command(about = "Print a summary of a repository's contents")]
+struct Args {
+    /// Path to the repository
+    #[arg(default_value = "/var/db/repos/gentoo")]
+    repo: String,
+}
 
-    let repo = match Repository::open(&path) {
+fn main() {
+    let args = Args::parse();
+
+    let repo = match Repository::open(&args.repo) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error opening repository at {path}: {e}");
+            eprintln!("Error opening repository at {}: {e}", args.repo);
             std::process::exit(1);
         }
     };
@@ -58,17 +55,14 @@ fn main() {
     println!("Packages: {total_packages}");
     println!("Ebuilds: {total_ebuilds}");
 
-    // Show eclasses
     if let Ok(eclasses) = repo.eclasses() {
         println!("Eclasses: {}", eclasses.len());
     }
 
-    // Show licenses
     if let Ok(licenses) = repo.licenses() {
         println!("Licenses: {}", licenses.len());
     }
 
-    // Show supported architectures
     let arches = repo.arch_list();
     if !arches.is_empty() {
         let keywords: Vec<&str> = arches.iter().map(|a| repo.arch_keyword(a)).collect();
