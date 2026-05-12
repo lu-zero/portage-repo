@@ -28,6 +28,7 @@ pub(crate) struct DieCommand {
 
 impl builtins::Command for DieCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -58,6 +59,7 @@ pub(crate) struct ExportFunctionsCommand {
 
 impl builtins::Command for ExportFunctionsCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -107,6 +109,7 @@ pub(crate) struct HasCommand {
 
 impl builtins::Command for HasCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -130,6 +133,7 @@ pub(crate) struct HasvCommand {
 
 impl builtins::Command for HasvCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -159,6 +163,7 @@ pub(crate) struct UseCommand {
 
 impl builtins::Command for UseCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -185,6 +190,7 @@ pub(crate) struct UsevCommand {
 
 impl builtins::Command for UsevCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -221,6 +227,7 @@ pub(crate) struct UsexCommand {
 
 impl builtins::Command for UsexCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -257,6 +264,7 @@ pub(crate) struct UseEnableCommand {
 
 impl builtins::Command for UseEnableCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -291,6 +299,7 @@ pub(crate) struct UseWithCommand {
 
 impl builtins::Command for UseWithCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -325,6 +334,7 @@ pub(crate) struct InIuseCommand {
 
 impl builtins::Command for InIuseCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -356,6 +366,7 @@ pub(crate) struct VerReplacingCommand {}
 
 impl builtins::Command for VerReplacingCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -382,6 +393,7 @@ pub(crate) struct EapiPredicateCommand {
 
 impl builtins::Command for EapiPredicateCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -577,6 +589,7 @@ pub(crate) struct EbuildPhaseFuncsCommand {
 
 impl builtins::Command for EbuildPhaseFuncsCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -678,6 +691,7 @@ pub(crate) struct EchoMessageCommand {
 
 impl builtins::Command for EchoMessageCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -702,6 +716,7 @@ pub(crate) struct EbeginCommand {
 
 impl builtins::Command for EbeginCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -727,6 +742,7 @@ pub(crate) struct EendCommand {
 
 impl builtins::Command for EendCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -758,6 +774,7 @@ pub(crate) struct EmakeCommand {
 
 impl builtins::Command for EmakeCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(
@@ -817,6 +834,7 @@ pub(crate) struct EconfCommand {
 
 impl builtins::Command for EconfCommand {
     type State = ();
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(

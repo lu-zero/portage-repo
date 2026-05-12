@@ -108,6 +108,7 @@ pub(crate) struct InheritCommand {
 
 impl builtins::Command for InheritCommand {
     type State = InheritState;
+    type SharedState = ();
     type Error = brush_core::Error;
 
     async fn execute<SE: brush_core::ShellExtensions>(

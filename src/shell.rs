@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use camino::Utf8PathBuf;
 
-use brush_builtins::ShellBuilderExt;
+use brush_builtins::ShellExt;
 use brush_core::parser::ParserImpl;
 use brush_core::{
     ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo,
@@ -217,7 +217,6 @@ impl EbuildShell {
         eclass_cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
     ) -> Result<Self> {
         let mut shell = Shell::builder()
-            .default_builtins(brush_builtins::BuiltinSet::BashMode)
             .do_not_inherit_env(true)
             .profile(ProfileLoadBehavior::Skip)
             .rc(RcLoadBehavior::Skip)
@@ -225,6 +224,8 @@ impl EbuildShell {
             .build()
             .await
             .map_err(|e| Error::Shell(e.to_string()))?;
+
+        shell.register_default_builtins(brush_builtins::BuiltinSet::BashMode);
 
         let eclass_dir: Utf8PathBuf = repo.path().join("eclass");
         let eclass_dirs: Vec<Utf8PathBuf> = if eclass_dir.is_dir() {
@@ -237,15 +238,12 @@ impl EbuildShell {
         builtins::register(&mut shell).await?;
 
         // Register `inherit` with a shared eclass AST cache.
-        let inherit_state = inherit::InheritState {
-            inherited: Vec::new(),
-            cache: eclass_cache,
-        };
-        shell.register_builtin_with_state(
-            "inherit",
-            brush_core::builtins::builtin::<inherit::InheritCommand, _>(),
-            inherit_state,
-        );
+        let inherit_reg = brush_core::builtins::builtin::<inherit::InheritCommand, _>()
+            .with_state(inherit::InheritState {
+                inherited: Vec::new(),
+                cache: eclass_cache,
+            });
+        shell.register_builtin("inherit", inherit_reg);
 
         // Register PMS 12.3 utility builtins (has, use, usev, usex, etc.).
         for (name, builtin) in [
