@@ -303,7 +303,7 @@ async fn main() {
     };
 
     eprintln!("Collecting ebuilds...");
-    let mut ebuilds = match repo.ebuilds() {
+    let ebuilds = match repo.ebuilds() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error collecting ebuilds: {e}");
@@ -311,9 +311,12 @@ async fn main() {
         }
     };
 
-    if let Some(ref f) = args.filter {
-        ebuilds.retain(|eb| matches_filter(&eb.cpv().to_string(), f));
-    }
+    let ebuilds = if let Some(ref f) = args.filter {
+        let f = f.clone();
+        ebuilds.filter(move |eb| matches_filter(&eb.cpv().to_string(), &f)).collect_vec()
+    } else {
+        ebuilds.collect_vec()
+    };
 
     let total = ebuilds.len();
     eprintln!("Found {total} ebuilds to process with {jobs} workers.");

@@ -155,7 +155,7 @@ async fn main() {
         }
     };
 
-    let mut ebuilds = match repo.ebuilds() {
+    let ebuilds = match repo.ebuilds() {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Error listing ebuilds: {e}");
@@ -163,9 +163,12 @@ async fn main() {
         }
     };
 
-    if let Some(ref f) = args.filter {
-        ebuilds.retain(|eb| matches_filter(eb, f));
-    }
+    let ebuilds = if let Some(ref f) = args.filter {
+        let f = f.clone();
+        ebuilds.filter(move |eb| matches_filter(eb, &f)).collect_vec()
+    } else {
+        ebuilds.collect_vec()
+    };
 
     let total = ebuilds.len();
     let filter_desc = args

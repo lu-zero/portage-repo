@@ -61,6 +61,6 @@ pub use package::Package;
 pub use pkgmetadata::PkgMetadata;
 pub use portage_metadata::interner::{DefaultInterner, GlobalInterner, Interner, NoInterner};
 pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
-pub use repository::{ProfileUpdate, Repository};
+pub use repository::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
 pub use shell::EbuildShell;
 pub use use_expand::UseExpand;

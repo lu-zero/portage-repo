@@ -9,6 +9,112 @@ use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
 
+use crate::ebuild::Ebuild;
+
+type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
+
+/// Lazy, composable ebuild discovery over a repository tree.
+///
+/// Wraps a [`jwalk::WalkDir`] builder and an optional filter closure.
+/// Nothing is walked until [`IntoIterator::into_iter`] or a collecting
+/// method is called. The filter is applied during iteration, not upfront.
+///
+/// ```
+/// # use portage_repo::Repository;
+/// # fn demo(repo: Repository) {
+/// // iterate lazily
+/// for ebuild in repo.ebuilds().unwrap() {
+///     println!("{}", ebuild.cpv());
+/// }
+///
+/// // filter + collect
+/// let ebuilds = repo.ebuilds()
+///     .unwrap()
+///     .filter(|eb| eb.category() == "dev-util")
+///     .collect_vec();
+/// # }
+/// ```
+pub struct Ebuilds {
+    walker: WalkDir,
+    filter: Option<Arc<EbuildFilter>>,
+}
+
+/// Concrete iterator produced by [`Ebuilds::into_iter`].
+///
+/// Holds the jwalk [`DirEntryIter`] and converts each entry
+/// to an [`Ebuild`] on the fly, applying the optional filter.
+pub struct EbuildsIter {
+    inner: jwalk::DirEntryIter<((), ())>,
+    filter: Option<Arc<EbuildFilter>>,
+}
+
+impl Ebuilds {
+    fn new(walker: WalkDir) -> Self {
+        Self {
+            walker,
+            filter: None,
+        }
+    }
+
+    /// Retain only ebuilds matching the predicate.
+    ///
+    /// Consuming: call `.filter(...)` repeatedly to chain predicates.
+    pub fn filter<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&Ebuild) -> bool + Send + Sync + 'static,
+    {
+        self.filter = Some(Arc::new(f));
+        self
+    }
+
+    /// Collect all matching ebuilds into a sorted `Vec`.
+    pub fn collect_vec(self) -> Vec<Ebuild> {
+        let mut v: Vec<Ebuild> = self.into_iter().collect();
+        v.sort_by(|a, b| a.cpv().cmp(b.cpv()));
+        v
+    }
+}
+
+fn dir_entry_to_ebuild(entry: jwalk::Result<jwalk::DirEntry<((), ())>>) -> Option<Ebuild> {
+    let entry = entry.ok()?;
+    let path: Utf8PathBuf = entry.path().try_into().ok()?;
+    let stem = path.file_name()?.strip_suffix(".ebuild")?;
+    let cat_name = path.parent()?.parent()?.file_name()?;
+
+    let mut cpv_str = String::with_capacity(cat_name.len() + 1 + stem.len());
+    cpv_str.push_str(cat_name);
+    cpv_str.push('/');
+    cpv_str.push_str(stem);
+    let cpv = Cpv::parse(&cpv_str).ok()?;
+    Some(Ebuild::new(cpv, path))
+}
+
+impl IntoIterator for Ebuilds {
+    type Item = Ebuild;
+    type IntoIter = EbuildsIter;
+
+    fn into_iter(self) -> EbuildsIter {
+        EbuildsIter {
+            inner: self.walker.into_iter(),
+            filter: self.filter,
+        }
+    }
+}
+
+impl Iterator for EbuildsIter {
+    type Item = Ebuild;
+
+    fn next(&mut self) -> Option<Ebuild> {
+        loop {
+            let ebuild = dir_entry_to_ebuild(self.inner.next()?)?;
+            match &self.filter {
+                Some(f) if !f(&ebuild) => continue,
+                _ => return Some(ebuild),
+            }
+        }
+    }
+}
+
 /// A single package-move or slot-move entry from `profiles/updates/`.
 ///
 /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
@@ -33,7 +139,6 @@ pub enum ProfileUpdate {
 }
 
 use crate::category::Category;
-use crate::ebuild::Ebuild;
 use crate::error::{Error, Result};
 use crate::layout::LayoutConf;
 use crate::profile::{Profile, ProfileDesc, ProfileStack};
@@ -122,13 +227,13 @@ impl Repository {
     /// are visited. Results are sorted by CPV.
     ///
     /// See [PMS 4](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
-    pub fn ebuilds(&self) -> Result<Vec<Ebuild>> {
+    pub fn ebuilds(&self) -> Result<Ebuilds> {
         let categories: HashSet<String> =
             util::read_lines(self.path.join("profiles").join("categories"))?
                 .into_iter()
                 .collect();
 
-        let mut ebuilds: Vec<Ebuild> = WalkDir::new(&self.path)
+        let walker = WalkDir::new(&self.path)
             .min_depth(3)
             .max_depth(3)
             .process_read_dir(move |depth, _path, _state, children| {
@@ -137,36 +242,16 @@ impl Repository {
                         let name = e.file_name();
                         let name = name.to_string_lossy();
                         match depth {
-                            // root entry itself — always keep
                             None => true,
-                            // reading root dir → category dirs
                             Some(0) => categories.contains(name.as_ref()),
-                            // reading category dir → package dirs
                             Some(1) => !name.starts_with('.'),
-                            // reading package dir → ebuild files
                             _ => name.ends_with(".ebuild"),
                         }
                     })
                 });
-            })
-            .into_iter()
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path: Utf8PathBuf = entry.path().try_into().ok()?;
-                let stem = path.file_name()?.strip_suffix(".ebuild")?;
-                let cat_name = path.parent()?.parent()?.file_name()?;
+            });
 
-                let mut cpv_str = String::with_capacity(cat_name.len() + 1 + stem.len());
-                cpv_str.push_str(cat_name);
-                cpv_str.push('/');
-                cpv_str.push_str(stem);
-                let cpv = Cpv::parse(&cpv_str).ok()?;
-                Some(Ebuild::new(cpv, path))
-            })
-            .collect();
-
-        ebuilds.sort_by(|a, b| a.cpv().cmp(b.cpv()));
-        Ok(ebuilds)
+        Ok(Ebuilds::new(walker))
     }
 
     /// Look up a single category by name.
@@ -808,7 +893,7 @@ mod tests {
         std::fs::write(pkg_dir.join("foo-1.0.ebuild"), "EAPI=8\n").unwrap();
         std::fs::write(pkg_dir.join("foo-2.0.ebuild"), "EAPI=8\n").unwrap();
 
-        let ebuilds = repo.ebuilds().unwrap();
+        let ebuilds: Vec<_> = repo.ebuilds().unwrap().into_iter().collect();
         assert_eq!(ebuilds.len(), 2);
     }
 
