@@ -8,7 +8,8 @@ cargo clippy -- -D warnings       # Lint — must be warning-free
 cargo fmt --check                 # Format check — must pass
 cargo doc --no-deps               # Build docs — must have no warnings
 cargo run --example enumerate_repo -- /path/to/repo  # Smoke-test the example
-cargo run --release --example regen_cache -- /path/to/repo  # Regenerate metadata cache
+cargo run --release --example regen_cache -- gentoo  # Regenerate metadata cache
+cargo run --release --example regen_only -- gentoo   # Regenerate (no comparison)
 ```
 
 ## Architecture
@@ -86,6 +87,15 @@ Do not assume existing patterns are correct; verify against the PMS.
 - **`bench.sh`** — head-to-head comparison: runs both `regen_only` and `pk` at the
   same job counts using `hyperfine`, then produces a combined timing+RSS table.
   Requires `hyperfine` to be installed.
+
+### Quick setup
+
+The examples expect a Gentoo ebuild tree at `./gentoo/`.  If it is missing,
+clone the mirror with a shallow fetch (≈200 MB):
+
+```bash
+git clone --depth 1 https://github.com/gentoo/gentoo.git gentoo
+```
 
 ### Running a quick comparison
 

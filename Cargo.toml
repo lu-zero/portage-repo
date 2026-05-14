@@ -15,8 +15,8 @@ dhat-heap = ["dep:dhat"]
 mimalloc = ["dep:mimalloc"]
 
 [dependencies]
-portage-atom = "0.6"
-portage-metadata = "0.5"
+portage-atom = "0.8"
+portage-metadata = "0.6"
 gentoo-core = "0.4"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
