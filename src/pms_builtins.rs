@@ -631,6 +631,24 @@ impl builtins::Command for EbuildPhaseFuncsCommand {
                 );
             }
 
+            // Install error stubs for default_<other_phase>() so they die if
+            // called outside their own phase (PMS §12.1).
+            for other in &[
+                "pkg_nofetch",
+                "src_unpack",
+                "src_prepare",
+                "src_configure",
+                "src_compile",
+                "src_test",
+                "src_install",
+            ] {
+                if *other != phase {
+                    script += &format!(
+                        "default_{other}() {{ die \"default_{other} called outside its phase (current: {phase})\"; }}\n"
+                    );
+                }
+            }
+
             // Install fallback only when the ebuild did not define the phase.
             let phase_defined = shell.funcs().get(phase.as_str()).is_some();
             if !phase_defined {
