@@ -103,9 +103,16 @@ implementation that installs into `${D}` with correct ownership/permissions.
 
 ### P4 — Unpack
 
-- [ ] `unpack` — currently a bash stub that calls `die`; needs dispatch
-  by extension: `.tar.*`, `.zip`, `.gz`, `.bz2`, `.xz`, `.zst`, `.7z`,
-  `.rar`, `.lha` (EAPI ≤ 7 only for 7z/rar/lha per PMS)
+- [x] `unpack` — Rust builtin dispatching by extension: `.tar.{gz,bz2,xz,zst,lz,lzma}`,
+  `.tgz`/`.tbz2`/`.tbz`/`.txz`, `.zip`, `.gz`/`.bz2`/`.xz`/`.lzma`/`.zst` (piped),
+  `.7z`/`.rar`/`.lha` (EAPI ≤ 7 only); bare names resolved via `$DISTDIR`;
+  absolute paths checked against EAPI ≥ 6; case-insensitive for EAPI ≤ 5
+- [x] `$A` computed from `$SRC_URI` via `SrcUriEntry::parse` with USE-conditional
+  evaluation; set before any phase function runs
+- [x] phase working directory: `src_unpack` and `pkg_nofetch` cd to `$WORKDIR`;
+  all other phases cd to `$S` (with `$WORKDIR` fallback)
+- [x] build-phase environment variables exported via `export` so external tools
+  (`make`, `./configure`, portage ebuild-helpers) inherit them
 
 ### P5 — Package query stubs
 
@@ -132,11 +139,16 @@ cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 compile
 cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 install    --work-dir /tmp/hello-build
 ```
 
-Once P4 (`unpack`) is done, the sequence becomes:
+Full sequence (using hello-2.12.3 — 2.12.2 has a gnulib/glibc incompatibility on newer systems):
 
 ```bash
-cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 unpack    --work-dir /tmp/hello-build
-cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 configure --work-dir /tmp/hello-build
-cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 compile   --work-dir /tmp/hello-build
-cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.2 install   --work-dir /tmp/hello-build
+# Download distfile once
+wget https://ftp.gnu.org/gnu/hello/hello-2.12.3.tar.gz -O ~/.cache/distfiles/hello-2.12.3.tar.gz
+
+WORK=/tmp/hello-build
+cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.3 unpack    --work-dir $WORK
+cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.3 configure --work-dir $WORK
+cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.3 compile   --work-dir $WORK
+cargo run --example ebuild -- /var/db/repos/gentoo app-misc/hello-2.12.3 install   --work-dir $WORK
+# Binary installed to $WORK/image/usr/bin/hello
 ```
