@@ -88,28 +88,39 @@ default_src_compile()   { :; }
 default_src_install()   { :; }
 default_src_test()      { :; }
 
-# Directory commands
-into()    { :; }
-insinto() { :; }
-exeinto() { :; }
+# Directory / option setters
+into()     { :; }
+insinto()  { :; }
+exeinto()  { :; }
+docinto()  { :; }
+insopts()  { :; }
+exeopts()  { :; }
 
 # Install commands
-dobin()    { :; }
-dosbin()   { :; }
-doins()    { :; }
-doman()    { :; }
-dodoc()    { :; }
-doheader() { :; }
-dolib.a()  { :; }
-dolib.so() { :; }
-newbin()   { :; }
-newins()   { :; }
-dosym()    { :; }
-dodir()    { :; }
-keepdir()  { :; }
-doexe()    { :; }
-doinitd()  { :; }
-doconfd()  { :; }
-fperms()   { :; }
-fowners()  { :; }
+dobin()     { :; }
+newbin()    { :; }
+dosbin()    { :; }
+newsbin()   { :; }
+doins()     { :; }
+newins()    { :; }
+doexe()     { :; }
+newexe()    { :; }
+dolib.a()   { :; }
+dolib.so()  { :; }
+dodir()     { :; }
+keepdir()   { :; }
+dodoc()     { :; }
+newdoc()    { :; }
+doman()     { :; }
+newman()    { :; }
+doheader()  { :; }
+newheader() { :; }
+dosym()     { :; }
+doinitd()   { :; }
+doconfd()   { :; }
+fperms()    { :; }
+fowners()   { :; }
+docompress() { :; }
+dostrip()    { :; }
+edo()        { :; }
 "#;

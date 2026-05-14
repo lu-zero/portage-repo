@@ -108,7 +108,10 @@ __eapi0_src_compile() {
     __eapi2_src_compile
 }
 __eapi0_src_test() {
-    local emake_cmd="${MAKE:-make} ${MAKEOPTS} ${EXTRA_EMAKE}"
+    # PMS: default src_test forces -j1 for EAPI ≤ 4 to avoid parallel test races.
+    local jobflag=""
+    ___eapi_default_src_test_disables_parallel_jobs && jobflag="-j1"
+    local emake_cmd="${MAKE:-make} ${MAKEOPTS} ${EXTRA_EMAKE}${jobflag:+ ${jobflag}}"
     if ${emake_cmd} check -n &>/dev/null; then
         ${emake_cmd} check || die "check target failed"
     elif ${emake_cmd} test -n &>/dev/null; then
@@ -128,6 +131,13 @@ __eapi2_src_compile() {
 __eapi4_src_install() {
     if [[ -f Makefile || -f GNUmakefile || -f makefile ]]; then
         emake DESTDIR="${D}" install || die "emake install failed"
+    fi
+    if [[ -v DOCS ]]; then
+        if [[ ${DOCS@a} == *a* ]]; then
+            [[ ${#DOCS[@]} -gt 0 ]] && dodoc "${DOCS[@]}"
+        elif [[ -n ${DOCS} ]]; then
+            dodoc ${DOCS}
+        fi
     fi
 }
 __eapi6_src_prepare() {
@@ -156,7 +166,7 @@ __eapi8_src_prepare() {
     fi
     eapply_user
 }
-nonfatal() { "$@"; }
+nonfatal() { PORTAGE_NONFATAL=1 "$@"; local _r=$?; unset PORTAGE_NONFATAL; return $_r; }
 assert() {
     local pipestatus=("${PIPESTATUS[@]}")
     local x
@@ -173,10 +183,308 @@ eapply() {
     done
 }
 eapply_user() { :; }
-einstalldocs() { :; }
 get_libdir() {
     local libdir_var="LIBDIR_${ABI}"
     [[ -n ${ABI} && -n ${!libdir_var} ]] && echo "${!libdir_var}" || echo "lib"
+}
+"#;
+
+/// P3 install helpers loaded by `init_build_env` (PMS §12.3.x).
+///
+/// These bash functions replace the no-op stubs from `builtins.rs` during
+/// build phases.  They install files into `${D}` using the standard `install`
+/// utility and track destination-directory state in shell variables.
+const INSTALL_HELPERS: &str = r#"
+# Destination-directory state — reset to defaults by this sourcing.
+_into_dir=/usr
+INSDESTTREE=
+EXEDESTTREE=
+DOCDESTTREE=
+_insopts="-m0644"
+_exeopts="-m0755"
+_docompress_includes=()
+_docompress_excludes=()
+_dostrip_includes=()
+_dostrip_excludes=()
+
+into()    { _into_dir="$1"; }
+insinto() { INSDESTTREE="$1"; }
+exeinto() { EXEDESTTREE="$1"; }
+docinto() { DOCDESTTREE="$1"; }
+insopts() { _insopts="$*"; }
+exeopts() { _exeopts="$*"; }
+
+dodir() {
+    local d
+    for d in "$@"; do
+        install -d "${D%/}/${d#/}" || die "dodir: failed to create ${d}"
+    done
+}
+
+keepdir() {
+    dodir "$@"
+    local d
+    for d in "$@"; do
+        : > "${D%/}/${d#/}/.keep_${CATEGORY}_${PN}-${SLOT//\//_}"
+    done
+}
+
+dobin() {
+    [[ $# -gt 0 ]] || die "dobin: at least one argument required"
+    dodir "${_into_dir}/bin"
+    local f
+    for f in "$@"; do
+        install -m0755 "${f}" "${D%/}/${_into_dir#/}/bin/${f##*/}" \
+            || die "dobin: failed to install ${f}"
+    done
+}
+
+newbin() {
+    [[ $# -eq 2 ]] || die "newbin: exactly two arguments required"
+    dodir "${_into_dir}/bin"
+    install -m0755 "$1" "${D%/}/${_into_dir#/}/bin/$2" \
+        || die "newbin: failed to install $1 as $2"
+}
+
+dosbin() {
+    [[ $# -gt 0 ]] || die "dosbin: at least one argument required"
+    dodir "${_into_dir}/sbin"
+    local f
+    for f in "$@"; do
+        install -m0755 "${f}" "${D%/}/${_into_dir#/}/sbin/${f##*/}" \
+            || die "dosbin: failed to install ${f}"
+    done
+}
+
+newsbin() {
+    [[ $# -eq 2 ]] || die "newsbin: exactly two arguments required"
+    dodir "${_into_dir}/sbin"
+    install -m0755 "$1" "${D%/}/${_into_dir#/}/sbin/$2" \
+        || die "newsbin: failed to install $1 as $2"
+}
+
+doins() {
+    local recursive=0
+    [[ $1 == -r ]] && { recursive=1; shift; }
+    [[ $# -gt 0 ]] || die "doins: at least one argument required"
+    dodir "${INSDESTTREE:-/}"
+    local dest="${D%/}/${INSDESTTREE#/}"
+    local f
+    for f in "$@"; do
+        if [[ $recursive -eq 1 && -d ${f} ]]; then
+            cp -pPR "${f}" "${dest}/" || die "doins: failed to copy ${f}"
+        else
+            install ${_insopts} "${f}" "${dest}/${f##*/}" \
+                || die "doins: failed to install ${f}"
+        fi
+    done
+}
+
+newins() {
+    [[ $# -eq 2 ]] || die "newins: exactly two arguments required"
+    dodir "${INSDESTTREE:-/}"
+    install ${_insopts} "$1" "${D%/}/${INSDESTTREE#/}/$2" \
+        || die "newins: failed to install $1 as $2"
+}
+
+doexe() {
+    [[ $# -gt 0 ]] || die "doexe: at least one argument required"
+    dodir "${EXEDESTTREE:-/}"
+    local dest="${D%/}/${EXEDESTTREE#/}"
+    local f
+    for f in "$@"; do
+        install ${_exeopts} "${f}" "${dest}/${f##*/}" \
+            || die "doexe: failed to install ${f}"
+    done
+}
+
+newexe() {
+    [[ $# -eq 2 ]] || die "newexe: exactly two arguments required"
+    dodir "${EXEDESTTREE:-/}"
+    install ${_exeopts} "$1" "${D%/}/${EXEDESTTREE#/}/$2" \
+        || die "newexe: failed to install $1 as $2"
+}
+
+dolib.a() {
+    [[ $# -gt 0 ]] || die "dolib.a: at least one argument required"
+    local libdir; libdir=$(get_libdir)
+    dodir "${_into_dir}/${libdir}"
+    local f
+    for f in "$@"; do
+        install -m0644 "${f}" "${D%/}/${_into_dir#/}/${libdir}/${f##*/}" \
+            || die "dolib.a: failed to install ${f}"
+    done
+}
+
+dolib.so() {
+    [[ $# -gt 0 ]] || die "dolib.so: at least one argument required"
+    local libdir; libdir=$(get_libdir)
+    dodir "${_into_dir}/${libdir}"
+    local f
+    for f in "$@"; do
+        install -m0755 "${f}" "${D%/}/${_into_dir#/}/${libdir}/${f##*/}" \
+            || die "dolib.so: failed to install ${f}"
+    done
+}
+
+dodoc() {
+    local recursive=0
+    [[ $1 == -r ]] && { recursive=1; shift; }
+    [[ $# -gt 0 ]] || die "dodoc: at least one argument required"
+    local docdir="${D%/}/usr/share/doc/${PF}${DOCDESTTREE:+/${DOCDESTTREE}}"
+    dodir "/usr/share/doc/${PF}${DOCDESTTREE:+/${DOCDESTTREE}}"
+    local f
+    for f in "$@"; do
+        if [[ $recursive -eq 1 && -d ${f} ]]; then
+            cp -pPR "${f}" "${docdir}/" || die "dodoc: failed to copy ${f}"
+        else
+            install -m0644 "${f}" "${docdir}/${f##*/}" \
+                || die "dodoc: failed to install ${f}"
+        fi
+    done
+}
+
+newdoc() {
+    [[ $# -eq 2 ]] || die "newdoc: exactly two arguments required"
+    local docdir="${D%/}/usr/share/doc/${PF}${DOCDESTTREE:+/${DOCDESTTREE}}"
+    dodir "/usr/share/doc/${PF}${DOCDESTTREE:+/${DOCDESTTREE}}"
+    install -m0644 "$1" "${docdir}/$2" || die "newdoc: failed to install $1 as $2"
+}
+
+doman() {
+    [[ $# -gt 0 ]] || die "doman: at least one argument required"
+    local f ext
+    for f in "$@"; do
+        ext="${f##*.}"
+        [[ -n ${ext} ]] || die "doman: cannot determine man section for ${f}"
+        dodir "/usr/share/man/man${ext}"
+        install -m0644 "${f}" "${D%/}/usr/share/man/man${ext}/${f##*/}" \
+            || die "doman: failed to install ${f}"
+    done
+}
+
+newman() {
+    [[ $# -eq 2 ]] || die "newman: exactly two arguments required"
+    local ext="${2##*.}"
+    [[ -n ${ext} ]] || die "newman: cannot determine man section for $2"
+    dodir "/usr/share/man/man${ext}"
+    install -m0644 "$1" "${D%/}/usr/share/man/man${ext}/$2" \
+        || die "newman: failed to install $1 as $2"
+}
+
+doheader() {
+    local recursive=0
+    [[ $1 == -r ]] && { recursive=1; shift; }
+    [[ $# -gt 0 ]] || die "doheader: at least one argument required"
+    dodir "/usr/include"
+    local f
+    for f in "$@"; do
+        if [[ $recursive -eq 1 && -d ${f} ]]; then
+            cp -pPR "${f}" "${D%/}/usr/include/" || die "doheader: failed to copy ${f}"
+        else
+            install -m0644 "${f}" "${D%/}/usr/include/${f##*/}" \
+                || die "doheader: failed to install ${f}"
+        fi
+    done
+}
+
+newheader() {
+    [[ $# -eq 2 ]] || die "newheader: exactly two arguments required"
+    dodir "/usr/include"
+    install -m0644 "$1" "${D%/}/usr/include/$2" \
+        || die "newheader: failed to install $1 as $2"
+}
+
+dosym() {
+    local relative=0
+    [[ $1 == -r ]] && { relative=1; shift; }
+    [[ $# -eq 2 ]] || die "dosym: usage: dosym [-r] target link"
+    local target="$1" link="$2"
+    dodir "${link%/*}"
+    if [[ $relative -eq 1 ]]; then
+        local rel_target
+        rel_target=$(python3 -c \
+            "import os,sys; print(os.path.relpath(sys.argv[1], os.path.dirname(sys.argv[2])))" \
+            "$target" "$link") || die "dosym: failed to compute relative path"
+        ln -snf "$rel_target" "${D%/}/${link#/}" || die "dosym: failed to create symlink"
+    else
+        ln -snf "$target" "${D%/}/${link#/}" || die "dosym: failed to create symlink"
+    fi
+}
+
+docompress() {
+    if [[ $1 == - ]]; then
+        shift; _docompress_excludes+=("$@")
+    else
+        _docompress_includes+=("$@")
+    fi
+}
+
+dostrip() {
+    if [[ $1 == - ]]; then
+        shift; _dostrip_excludes+=("$@")
+    else
+        _dostrip_includes+=("$@")
+    fi
+}
+
+doinitd() {
+    [[ $# -gt 0 ]] || die "doinitd: at least one argument required"
+    insinto /etc/init.d
+    insopts -m0755
+    doins "$@"
+    insopts -m0644
+}
+
+doconfd() {
+    [[ $# -gt 0 ]] || die "doconfd: at least one argument required"
+    insinto /etc/conf.d
+    doins "$@"
+}
+
+fperms() {
+    [[ $# -ge 2 ]] || die "fperms: usage: fperms mode file..."
+    local mode="$1"; shift
+    local f
+    for f in "$@"; do
+        chmod "$mode" "${D%/}/${f#/}" || die "fperms: failed to chmod ${f}"
+    done
+}
+
+fowners() {
+    [[ $# -ge 2 ]] || die "fowners: usage: fowners owner file..."
+    local owner="$1"; shift
+    local f
+    for f in "$@"; do
+        chown "$owner" "${D%/}/${f#/}" || die "fowners: failed to chown ${f}"
+    done
+}
+
+edo() {
+    einfo "$@"
+    "$@" || die "edo: command failed: $*"
+}
+
+einstalldocs() {
+    local f
+    if [[ -v DOCS ]]; then
+        if [[ ${DOCS@a} == *a* ]]; then
+            [[ ${#DOCS[@]} -gt 0 ]] && dodoc -r "${DOCS[@]}"
+        elif [[ -n ${DOCS} ]]; then
+            dodoc -r ${DOCS}
+        fi
+    else
+        for f in README* CHANGES* ChangeLog* CHANGELOG* AUTHORS* NEWS* TODO* THANKS*; do
+            [[ -s ${f} ]] && dodoc "${f}"
+        done
+    fi
+    if [[ -v HTML_DOCS ]]; then
+        if [[ ${HTML_DOCS@a} == *a* ]]; then
+            [[ ${#HTML_DOCS[@]} -gt 0 ]] && dodoc -r "${HTML_DOCS[@]}"
+        elif [[ -n ${HTML_DOCS} ]]; then
+            dodoc -r ${HTML_DOCS}
+        fi
+    fi
 }
 "#;
 
@@ -665,6 +973,11 @@ impl EbuildShell {
         // These are called by __ebuild_phase_funcs (a Rust builtin) to set up
         // default() and default_<phase>() for the currently executing phase.
         self.run_string(PHASE_DEFAULT_FUNCTIONS).await?;
+
+        // Define real P3 install helpers (dobin, doins, dodoc, dosym, …).
+        // These override the no-op stubs from builtins.rs that were needed
+        // for metadata extraction.
+        self.run_string(INSTALL_HELPERS).await?;
 
         Ok(())
     }
