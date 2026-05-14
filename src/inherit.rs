@@ -179,14 +179,19 @@ impl builtins::Command for InheritCommand {
             let params = context.shell.default_exec_params();
 
             // Use pin_owned() for an owned guard that is Send — safe across .await.
+            // get_or_insert_with is atomic: the closure runs at most once per key
+            // even under concurrent worker access, avoiding duplicate parses.
             let pinned = cache.pin_owned();
-            if !pinned.contains_key(eclass) {
+            let mut was_miss = false;
+            let program = pinned.get_or_insert_with(eclass.clone(), || {
+                was_miss = true;
+                parse_eclass_file(&eclass_file, &parser_options)
+            });
+            if was_miss {
                 CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
-                pinned.insert(eclass.clone(), parse_eclass_file(&eclass_file, &parser_options));
             } else {
                 CACHE_HITS.fetch_add(1, Ordering::Relaxed);
             }
-            let program = pinned.get(eclass).unwrap();
 
             let result = context
                 .shell

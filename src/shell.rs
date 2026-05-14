@@ -1175,35 +1175,6 @@ impl EbuildShell {
     /// ebuild processing, eliminating all per-worker parse work and any concurrent
     /// insert races.  Directories are searched in order; the first definition of
     /// each eclass name wins (same priority as `inherit`).
-    pub fn prewarm_eclass_cache(&self) {
-        let Some(state) = self
-            .shell
-            .builtin_state_of::<inherit::InheritCommand>("inherit")
-        else {
-            return;
-        };
-        let cache = &state.cache;
-        let options = self.shell.parser_options();
-        for dir in &self.eclass_dirs {
-            let Ok(entries) = std::fs::read_dir(dir.as_std_path()) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("eclass") {
-                    continue;
-                }
-                let Some(name) = path.file_stem().and_then(|s| s.to_str()).map(str::to_owned) else {
-                    continue;
-                };
-                let eclass_path = camino::Utf8PathBuf::try_from(path).unwrap();
-                cache.pin().get_or_insert_with(name.clone(), || {
-                    inherit::parse_eclass_file(&eclass_path, &options)
-                });
-            }
-        }
-    }
-
     /// Source an eclass by name.
     ///
     /// Searches the configured eclass directories in order.

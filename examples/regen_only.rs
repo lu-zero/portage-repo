@@ -192,15 +192,6 @@ async fn main() {
     let eclass_cache: EclassChecksumCache = Arc::new(Mutex::new(HashMap::new()));
     let ast_cache: EclassAstCache = Arc::new(papaya::HashMap::new());
 
-    {
-        let shell = repo
-            .shell_with_masters_and_cache(&[], Arc::clone(&ast_cache))
-            .await
-            .expect("prewarm shell");
-        shell.prewarm_eclass_cache();
-        eprintln!("Prewarmed {} eclasses.", ast_cache.pin().len());
-    }
-
     let mut handles = Vec::new();
     for _ in 0..jobs {
         let rx = rx.clone();
