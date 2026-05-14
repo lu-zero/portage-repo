@@ -9,7 +9,7 @@ use brush_core::parser::ParserImpl;
 use brush_core::{
     ProfileLoadBehavior, RcLoadBehavior, Shell, ShellValue, ShellVariable, SourceInfo,
 };
-use portage_metadata::{Eapi, EbuildMetadata, Phase};
+use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 
 use crate::builtins;
 use crate::ebuild::Ebuild;
@@ -165,7 +165,6 @@ assert() {
         [[ $# -gt 0 ]] && die "$@" || die "assert: command failed"
     done
 }
-unpack() { die "unpack: not yet implemented (P4)"; }
 eapply() {
     local f
     for f in "$@"; do
@@ -333,6 +332,12 @@ impl EbuildShell {
         shell.register_builtin(
             "econf",
             brush_core::builtins::builtin::<pms_builtins::EconfCommand, _>(),
+        );
+
+        // Register P4 unpack builtin.
+        shell.register_builtin(
+            "unpack",
+            brush_core::builtins::builtin::<pms_builtins::UnpackCommand, _>(),
         );
 
         // Register PMS 12.3.14 version manipulation builtins.
@@ -651,7 +656,7 @@ impl EbuildShell {
         // These stubs shadow the Rust builtins for econf, emake, einfo, etc.
         // Unsetting them lets the Rust builtin registry take over during build.
         self.run_string(
-            "unset -f econf emake einfo einfon elog ewarn eerror eqawarn ebegin eend nonfatal",
+            "unset -f econf emake unpack einfo einfon elog ewarn eerror eqawarn ebegin eend nonfatal",
         )
         .await
         .ok();
@@ -734,7 +739,8 @@ impl EbuildShell {
         self.set_var("TMPDIR", &t.to_string_lossy());
         self.set_var("HOME", &homedir.to_string_lossy());
         self.set_var("D", &format!("{}/", d.display()));
-        self.set_var("DISTDIR", "/var/cache/distfiles");
+        // DISTDIR is already set by init_build_env() from env or ~/.cache/distfiles;
+        // do not override it here.
 
         // Phase and merge variables.
         let (phase_val, func_name) = phase_to_func(phase);
@@ -781,6 +787,18 @@ impl EbuildShell {
             self.run_string("shopt -u failglob").await?;
         }
 
+        // Export all PM-provided variables so external processes (make, ./configure,
+        // portage ebuild-helpers like dodoc/doins) inherit them as environment variables.
+        // Bash `export` on an unset/empty name is harmless — it just marks it for export.
+        self.run_string(
+            "export CATEGORY PN PV PR PVR P PF FILESDIR WORKDIR S T D EAPI EBUILD \
+             HOME ROOT DISTDIR PORTAGE_BIN_PATH PATH EBUILD_PHASE EBUILD_PHASE_FUNC \
+             MERGE_TYPE EPREFIX ED EROOT SYSROOT ESYSROOT BROOT USE \
+             MAKEOPTS CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CC CXX AR RANLIB NM STRIP",
+        )
+        .await
+        .ok();
+
         // Source the ebuild — defines all phase functions and global variables.
         let params = self.shell.default_exec_params();
         self.shell
@@ -802,6 +820,13 @@ impl EbuildShell {
             self.set_var(e_var, "");
         }
 
+        // Compute $A from $SRC_URI for the active USE flag set.
+        // $A is the space-separated list of distfile names needed by this ebuild.
+        // It is a PM-provided variable (not computed in bash) and must be set
+        // before any phase function runs (src_unpack reads it via ${A}).
+        self.set_a_from_src_uri();
+        self.run_string("export A").await.ok();
+
         // Wire up `default` and any missing EAPI default implementations
         // (e.g. src_compile → __eapi2_src_compile) for the current phase.
         // __ebuild_phase_funcs is a Rust builtin (not in funcs()), always run it.
@@ -809,9 +834,14 @@ impl EbuildShell {
             .await
             .ok();
 
-        // Change working directory to $S (the package source directory) so
-        // that phase functions and spawned build tools see the right CWD.
-        self.run_string("cd \"${S}\" 2>/dev/null || true").await.ok();
+        // Set the working directory for the phase.
+        // src_unpack and pkg_nofetch run in $WORKDIR (archives are extracted there;
+        // $S doesn't exist yet).  All other phases run in $S (the source tree).
+        let cd_target = match func_name {
+            "src_unpack" | "pkg_nofetch" => "\"${WORKDIR}\"",
+            _ => "\"${S}\" 2>/dev/null || cd \"${WORKDIR}\" 2>/dev/null || true",
+        };
+        self.run_string(&format!("cd {cd_target}")).await.ok();
 
         // Run the phase function (may have been defined by the ebuild or by
         // __ebuild_phase_funcs as a fallback calling default()).
@@ -989,6 +1019,34 @@ impl EbuildShell {
         flags.join(" ")
     }
 
+    /// Compute `$A` from `$SRC_URI` and inject it into the shell environment.
+    ///
+    /// `$A` is a PM-provided variable containing the space-separated list of
+    /// distfile names required by the ebuild for the currently active USE flags.
+    /// It is computed by the PM (not in bash) and must be set before any phase
+    /// function runs, since `src_unpack` and `pkg_nofetch` iterate `${A}`.
+    ///
+    /// USE-conditional groups (`flag? ( ... )`) are evaluated against
+    /// [`Self::use_flags`]; unconditional files are always included.
+    fn set_a_from_src_uri(&mut self) {
+        let src_uri = self.get_var("SRC_URI").unwrap_or_default();
+        if src_uri.is_empty() {
+            self.set_var("A", "");
+            return;
+        }
+        let entries = match SrcUriEntry::parse(&src_uri) {
+            Ok(e) => e,
+            Err(_) => {
+                self.set_var("A", "");
+                return;
+            }
+        };
+        let use_flags = self.use_flags.clone();
+        let mut files: Vec<String> = Vec::new();
+        collect_src_filenames(&entries, &use_flags, &mut files);
+        self.set_var("A", &files.join(" "));
+    }
+
     /// Extract metadata from shell variables into a `CacheEntry`-compatible string
     /// and parse it via portage-metadata.
     fn extract_metadata(&self) -> Result<EbuildMetadata> {
@@ -1033,6 +1091,34 @@ impl EbuildShell {
         let mut metadata = entry.metadata;
         metadata.defined_phases = defined_phases;
         Ok(metadata)
+    }
+}
+
+/// Recursively collect distfile names from a parsed `SRC_URI` tree.
+///
+/// USE-conditional groups are evaluated against `use_flags`; unconditional
+/// files are always appended.  The `->` arrow rename case is handled by
+/// the `Renamed` variant (target filename is used, not the source URL).
+fn collect_src_filenames(
+    entries: &[SrcUriEntry],
+    use_flags: &HashSet<String>,
+    files: &mut Vec<String>,
+) {
+    for entry in entries {
+        match entry {
+            SrcUriEntry::Uri { filename, .. } => files.push(filename.clone()),
+            SrcUriEntry::Renamed { target, .. } => files.push(target.clone()),
+            SrcUriEntry::UseConditional { flag, negated, entries } => {
+                let flag_set = use_flags.contains(flag.as_str());
+                // Include when: (not negated AND flag set) OR (negated AND flag not set).
+                if flag_set != *negated {
+                    collect_src_filenames(entries, use_flags, files);
+                }
+            }
+            SrcUriEntry::Group(entries) => {
+                collect_src_filenames(entries, use_flags, files);
+            }
+        }
     }
 }
 
