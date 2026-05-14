@@ -16,7 +16,7 @@ mimalloc = ["dep:mimalloc"]
 
 [dependencies]
 portage-atom = "0.6"
-portage-metadata = { path = "../portage-metadata", version = "0.4" }
+portage-metadata = "0.5"
 gentoo-core = "0.4"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
