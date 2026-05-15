@@ -11,10 +11,10 @@ use brush_core::{
 };
 use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 
-use super::builtins;
+use super::stubs;
 use crate::repo::ebuild::Ebuild;
 use crate::error::{Error, Result};
-use super::inherit;
+use super::commands::inherit;
 use super::commands;
 use crate::repo::repository::Repository;
 use super::ver_funcs;
@@ -569,7 +569,7 @@ impl EbuildShell {
         };
 
         // Register Portage-specific shell functions (die, EXPORT_FUNCTIONS, etc.)
-        builtins::register(&mut shell).await?;
+        stubs::register(&mut shell).await?;
 
         // Register `inherit` with a shared eclass AST cache.
         let inherit_reg = brush_core::builtins::builtin::<inherit::InheritCommand, _>()

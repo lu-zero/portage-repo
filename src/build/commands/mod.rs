@@ -13,6 +13,7 @@ pub(crate) mod econf;
 pub(crate) mod emake;
 pub(crate) mod export_functions;
 pub(crate) mod has;
+pub mod inherit;
 pub(crate) mod output;
 pub(crate) mod phase_funcs;
 pub(crate) mod unpack;
