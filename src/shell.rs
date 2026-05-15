@@ -327,6 +327,33 @@ dolib.so() {
     done
 }
 
+dolib() {
+    [[ $# -gt 0 ]] || die "dolib: at least one argument required"
+    local f
+    for f in "$@"; do
+        case "${f}" in
+            *.so|*.so.*) dolib.so "${f}" ;;
+            *)           dolib.a  "${f}" ;;
+        esac
+    done
+}
+
+newlib.a() {
+    [[ $# -eq 2 ]] || die "newlib.a: exactly two arguments required"
+    local libdir; libdir=$(get_libdir)
+    dodir "${_into_dir}/${libdir}"
+    install -m0644 "$1" "${D%/}/${_into_dir#/}/${libdir}/$2" \
+        || die "newlib.a: failed to install $1 as $2"
+}
+
+newlib.so() {
+    [[ $# -eq 2 ]] || die "newlib.so: exactly two arguments required"
+    local libdir; libdir=$(get_libdir)
+    dodir "${_into_dir}/${libdir}"
+    install -m0755 "$1" "${D%/}/${_into_dir#/}/${libdir}/$2" \
+        || die "newlib.so: failed to install $1 as $2"
+}
+
 dodoc() {
     local recursive=0
     [[ $1 == -r ]] && { recursive=1; shift; }

@@ -97,9 +97,8 @@ Implemented as bash functions in `INSTALL_HELPERS` const (shell.rs), loaded by
 - [x] `doinitd` / `doconfd` / `fperms` / `fowners`
 - [x] `__eapi4_src_install` DOCS: calls `dodoc "${DOCS[@]}"` / `dodoc ${DOCS}`
 
-Missing from INSTALL_HELPERS (not yet needed):
-- [ ] `dolib` (bare) — portage extension, not in PMS; usually `dolib.so`
-- [ ] `newlib.a` / `newlib.so`
+- [x] `dolib` (bare) — routes to `dolib.so` for `.so`/`.so.*`, `dolib.a` otherwise
+- [x] `newlib.a` / `newlib.so`
 
 ### P4 — Unpack
 
