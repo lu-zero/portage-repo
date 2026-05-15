@@ -45,12 +45,11 @@ builtins below take effect.
   `__ebuild_phase_funcs`
 
 Known gaps in `__eapi0_src_test`:
-- [ ] missing `-j1` for EAPI ≤ 4 (needs `___eapi_default_src_test_disables_parallel_jobs`)
+- [x] missing `-j1` for EAPI ≤ 4 — now uses `___eapi_default_src_test_disables_parallel_jobs`
 - [ ] missing MAKEFLAGS jobserver guard (portage bug #692576)
 
 Known gap in `EbuildPhaseFuncsCommand`:
-- [ ] does not install `default_<other_phase>()` error stubs for phases
-  other than the one currently executing (portage installs all of them)
+- [x] does not install `default_<other_phase>()` error stubs — now installed in commit 192bd44
 
 ### P1 — Output helpers
 
@@ -65,14 +64,12 @@ Known gap in `EbuildPhaseFuncsCommand`:
   probes `--help` for conditional flags with word-boundary guard
 - [x] `assert` — bash function; captures `PIPESTATUS` before any other
   command to avoid clobbering
-- [x] `nonfatal` — bash function `"$@"; return 0`
-  - [ ] does not set `PORTAGE_NONFATAL=1` (harmless: our `die` builtin
-    does not check it, but latent if die grows nonfatal support)
+- [x] `nonfatal` — sets `PORTAGE_NONFATAL=1`, runs `"$@"`, unsets on return
 - [x] `eapply` — bash function; `patch -p1 < file` loop
 - [x] `eapply_user` — stub (`:`)
-- [x] `einstalldocs` — stub (`:`)
+- [x] `einstalldocs` — real impl: respects `$DOCS` array/string, auto-installs README*/CHANGES*/AUTHORS*/NEWS*, handles `$HTML_DOCS`
 - [x] `get_libdir` — checks `LIBDIR_${ABI}`, defaults to `lib`
-- [ ] `edo` — EAPI 9 only; not yet implemented
+- [x] `edo` — einfo + exec, die on failure (EAPI 9)
 
 Known gaps shared by `emake` and `econf`:
 - [ ] `MAKEOPTS` / `EXTRA_EMAKE` / `EXTRA_ECONF` are split on whitespace;
@@ -81,25 +78,28 @@ Known gaps shared by `emake` and `econf`:
 
 ### P3 — Install helpers
 
-All currently bash no-op stubs in `builtins.rs`.  Each needs a real
-implementation that installs into `${D}` with correct ownership/permissions.
+Implemented as bash functions in `INSTALL_HELPERS` const (shell.rs), loaded by
+`init_build_env()`.  Stubs in `builtins.rs` remain for metadata-only mode.
 
-- [ ] `into` / `insinto` / `exeinto` / `docinto`
-- [ ] `insopts` / `exeopts`
-- [ ] `dobin` / `newbin`
-- [ ] `dosbin` / `newsbin`
-- [ ] `doins` / `newins`
-- [ ] `doexe` / `newexe`
-- [ ] `dolib` / `dolib.a` / `dolib.so`
-- [ ] `dodir` / `keepdir`
-- [ ] `dodoc` / `newdoc`  (also needed by `__eapi4_src_install` DOCS handling)
-- [ ] `doman` / `newman`
-- [ ] `dosym` (EAPI 8 adds `-r` for relative symlinks)
-- [ ] `doheader` / `newheader`
-- [ ] `docompress`
-- [ ] `dostrip`
-- [ ] `__eapi4_src_install` DOCS: currently missing `dodoc` call after
-  `make install`; any EAPI 4–5 package that sets `DOCS` will silently skip docs
+- [x] `into` / `insinto` / `exeinto` / `docinto` — state setters
+- [x] `insopts` / `exeopts`
+- [x] `dobin` / `newbin`
+- [x] `dosbin` / `newsbin`
+- [x] `doins` / `newins` (with `-r` for recursive copy)
+- [x] `doexe` / `newexe`
+- [x] `dolib.a` / `dolib.so`
+- [x] `dodir` / `keepdir`
+- [x] `dodoc` / `newdoc` (with `-r`)
+- [x] `doman` / `newman`
+- [x] `dosym` (EAPI 8 `-r` via `python3 os.path.relpath`)
+- [x] `doheader` / `newheader` (with `-r`)
+- [x] `docompress` / `dostrip` — record include/exclude lists
+- [x] `doinitd` / `doconfd` / `fperms` / `fowners`
+- [x] `__eapi4_src_install` DOCS: calls `dodoc "${DOCS[@]}"` / `dodoc ${DOCS}`
+
+Missing from INSTALL_HELPERS (not yet needed):
+- [ ] `dolib` (bare) — portage extension, not in PMS; usually `dolib.so`
+- [ ] `newlib.a` / `newlib.so`
 
 ### P4 — Unpack
 
