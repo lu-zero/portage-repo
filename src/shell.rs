@@ -986,6 +986,15 @@ impl EbuildShell {
                 self.set_var(var, &val);
             }
         }
+        // Strip GNU make jobserver tokens from MAKEFLAGS if set.  The fds
+        // (--jobserver-auth=R,W or legacy --jobserver-fds=R,W) belong to a
+        // make process in the caller's tree and are not valid here.  Leaving
+        // them in causes every make invocation in every phase to try to open
+        // dead file descriptors.
+        if let Ok(flags) = std::env::var("MAKEFLAGS") {
+            let clean = strip_jobserver_tokens(&flags);
+            self.set_var("MAKEFLAGS", &clean);
+        }
 
         // Remove bash stub no-ops that were installed for metadata extraction.
         // These stubs shadow the Rust builtins for econf, emake, einfo, etc.
@@ -1406,6 +1415,23 @@ impl EbuildShell {
 }
 
 /// Recursively collect distfile names from a parsed `SRC_URI` tree.
+/// Remove GNU make jobserver tokens from a MAKEFLAGS string.
+///
+/// `--jobserver-auth=R,W` (make ≥ 4.2) and `--jobserver-fds=R,W` (older
+/// make) encode file-descriptor numbers that are only valid inside the make
+/// process tree that created them.  Any other process that inherits MAKEFLAGS
+/// and tries to open those fds will get EBADF or hit a completely unrelated
+/// fd.  Strip them unconditionally at build-env initialisation time.
+fn strip_jobserver_tokens(flags: &str) -> String {
+    let cleaned: Vec<&str> = flags
+        .split_whitespace()
+        .filter(|tok| {
+            !tok.starts_with("--jobserver-auth=") && !tok.starts_with("--jobserver-fds=")
+        })
+        .collect();
+    cleaned.join(" ")
+}
+
 ///
 /// USE-conditional groups are evaluated against `use_flags`; unconditional
 /// files are always appended.  The `->` arrow rename case is handled by

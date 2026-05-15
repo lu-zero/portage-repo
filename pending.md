@@ -46,7 +46,7 @@ builtins below take effect.
 
 Known gaps in `__eapi0_src_test`:
 - [x] missing `-j1` for EAPI ≤ 4 — now uses `___eapi_default_src_test_disables_parallel_jobs`
-- [ ] missing MAKEFLAGS jobserver guard (portage bug #692576)
+- [x] MAKEFLAGS jobserver guard — `strip_jobserver_tokens()` called in `init_build_env` strips `--jobserver-auth`/`--jobserver-fds` before any phase runs
 
 Known gap in `EbuildPhaseFuncsCommand`:
 - [x] does not install `default_<other_phase>()` error stubs — now installed in commit 192bd44
