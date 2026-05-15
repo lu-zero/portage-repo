@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{Error, Result};
-use crate::util;
+use super::util;
 
 /// Parsed representation of `metadata/layout.conf`.
 ///

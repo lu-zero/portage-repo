@@ -7,7 +7,7 @@ use portage_metadata::Eapi;
 use regex::Regex;
 
 use crate::error::Result;
-use crate::util;
+use super::util;
 
 /// PMS 7.3.1 regex for detecting EAPI before sourcing.
 ///

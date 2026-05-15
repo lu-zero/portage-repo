@@ -2,11 +2,11 @@ use camino::{Utf8Path, Utf8PathBuf};
 
 use portage_atom::{Cpn, Cpv};
 
-use crate::ebuild::Ebuild;
+use super::ebuild::Ebuild;
 use crate::error::Result;
-use crate::manifest::Manifest;
-use crate::pkgmetadata::PkgMetadata;
-use crate::util;
+use super::manifest::Manifest;
+use super::pkgmetadata::PkgMetadata;
+use super::util;
 
 /// A package directory within a category.
 ///

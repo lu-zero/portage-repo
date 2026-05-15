@@ -11,13 +11,13 @@ use brush_core::{
 };
 use portage_metadata::{Eapi, EbuildMetadata, Phase, SrcUriEntry};
 
-use crate::builtins;
-use crate::ebuild::Ebuild;
+use super::builtins;
+use crate::repo::ebuild::Ebuild;
 use crate::error::{Error, Result};
-use crate::inherit;
-use crate::pms_builtins;
-use crate::repository::Repository;
-use crate::ver_funcs;
+use super::inherit;
+use super::pms_builtins;
+use crate::repo::repository::Repository;
+use super::ver_funcs;
 
 /// Metadata variables extracted from a sourced ebuild.
 ///
@@ -854,9 +854,9 @@ impl EbuildShell {
         // Clear accumulating vars and their E_* counterparts before sourcing.
         // The ebuild's own inherit calls will repopulate E_* during sourcing.
         let e_accum_pre: &[&str] = if eapi >= Eapi::Eight {
-            crate::inherit::E_VARS_ALL
+            inherit::E_VARS_ALL
         } else {
-            crate::inherit::E_VARS_BASE
+            inherit::E_VARS_BASE
         };
         for (&var, &e_var) in accum_vars.iter().zip(e_accum_pre.iter()) {
             self.set_var(var, "");
@@ -893,9 +893,9 @@ impl EbuildShell {
         // After sourcing, `var` holds only what the ebuild set; `E_{var}` holds
         // the total of all eclass contributions.  Append eclass total to ebuild value.
         let e_accum_vars: &[&str] = if eapi >= Eapi::Eight {
-            crate::inherit::E_VARS_ALL
+            inherit::E_VARS_ALL
         } else {
-            crate::inherit::E_VARS_BASE
+            inherit::E_VARS_BASE
         };
         for (&var, &e_var) in accum_vars.iter().zip(e_accum_vars.iter()) {
             let ebuild_val = self.get_var(var).unwrap_or_default();
@@ -1456,6 +1456,70 @@ fn collect_src_filenames(
                 collect_src_filenames(entries, use_flags, files);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Repository shell factory methods — live here so repo/ stays brush-free.
+// ---------------------------------------------------------------------------
+
+impl Repository {
+    /// Create an [`EbuildShell`] configured for this repository.
+    pub async fn shell(&self) -> Result<EbuildShell> {
+        EbuildShell::new(self).await
+    }
+
+    /// Create an [`EbuildShell`] with master repository eclass directories.
+    ///
+    /// Master eclass directories are prepended (searched first).
+    /// See [PMS 4.7](https://projects.gentoo.org/pms/9/pms.html#tree-layout).
+    pub async fn shell_with_masters(&self, masters: &[&Repository]) -> Result<EbuildShell> {
+        let mut shell = EbuildShell::new(self).await?;
+        for master in masters.iter().rev() {
+            let dir = master.path().join("eclass");
+            if dir.is_dir() {
+                shell.prepend_eclass_dir(dir);
+            }
+        }
+        Ok(shell)
+    }
+
+    /// Like [`shell_with_masters`](Self::shell_with_masters) but shares an
+    /// eclass AST cache across all created shells.
+    pub async fn shell_with_masters_and_cache(
+        &self,
+        masters: &[&Repository],
+        cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
+    ) -> Result<EbuildShell> {
+        let mut shell = EbuildShell::new_with_cache(self, cache).await?;
+        for master in masters.iter().rev() {
+            let dir = master.path().join("eclass");
+            if dir.is_dir() {
+                shell.prepend_eclass_dir(dir);
+            }
+        }
+        Ok(shell)
+    }
+
+    /// Create an [`EbuildShell`] with a profile's USE configuration applied.
+    ///
+    /// `profile_rel_path` is relative to the repository's `profiles/` directory.
+    /// `make_conf` is an optional `make.conf`-style script sourced after the
+    /// profile chain but before `use.force`/`use.mask`.
+    ///
+    /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).
+    pub async fn shell_with_profile(
+        &self,
+        profile_rel_path: &str,
+        make_conf: Option<&std::path::Path>,
+    ) -> Result<EbuildShell> {
+        use crate::repo::profile::ProfileStack;
+        let path = self.path().join("profiles").join(profile_rel_path);
+        let stack = ProfileStack::build(path.into())?;
+        let mut shell = EbuildShell::new(self).await?;
+        let confs: Vec<&std::path::Path> = make_conf.into_iter().collect();
+        stack.configure_shell(&mut shell, &confs).await?;
+        Ok(shell)
     }
 }
 

@@ -33,34 +33,26 @@
 //! > thoroughly audited. It may contain bugs, incomplete PMS coverage, or
 //! > surprising edge-case behaviour. Use at your own risk.
 
-mod builtins;
-mod category;
-mod ebuild;
 mod error;
-pub mod inherit;
-mod layout;
-mod manifest;
-mod package;
-mod pkgmetadata;
-mod pms_builtins;
-mod profile;
-mod repository;
-mod shell;
-mod use_expand;
-mod util;
-mod ver_funcs;
+pub mod repo;
+pub mod build;
 
-pub use category::Category;
-pub use ebuild::Ebuild;
+// Backwards-compatible re-export of `inherit` at the crate root.
+pub use build::inherit as inherit;
+
 pub use error::{Error, Result};
+
+// Re-export the most-used types at crate root for backwards compat
+pub use repo::Category;
+pub use repo::Ebuild;
 pub use gentoo_core::arch::ExoticKey;
 pub use gentoo_core::{Arch, KnownArch, arch};
-pub use layout::LayoutConf;
-pub use manifest::{Manifest, ManifestEntry};
-pub use package::Package;
-pub use pkgmetadata::PkgMetadata;
+pub use repo::LayoutConf;
+pub use repo::{Manifest, ManifestEntry};
+pub use repo::Package;
+pub use repo::PkgMetadata;
 pub use portage_metadata::interner::{DefaultInterner, GlobalInterner, Interner, NoInterner};
-pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
-pub use repository::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
-pub use shell::EbuildShell;
-pub use use_expand::UseExpand;
+pub use repo::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
+pub use repo::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
+pub use build::EbuildShell;
+pub use repo::UseExpand;

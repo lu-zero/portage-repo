@@ -9,7 +9,7 @@ use jwalk::WalkDir;
 use portage_atom::{Cpn, Cpv, Dep};
 use portage_metadata::{CacheEntry, Eapi};
 
-use crate::ebuild::Ebuild;
+use super::ebuild::Ebuild;
 
 type EbuildFilter = dyn Fn(&Ebuild) -> bool + Send + Sync;
 
@@ -138,13 +138,12 @@ pub enum ProfileUpdate {
     },
 }
 
-use crate::category::Category;
+use super::category::Category;
 use crate::error::{Error, Result};
-use crate::layout::LayoutConf;
-use crate::profile::{Profile, ProfileDesc, ProfileStack};
-use crate::shell::EbuildShell;
-use crate::use_expand::UseExpand;
-use crate::util;
+use super::layout::LayoutConf;
+use super::profile::{Profile, ProfileDesc, ProfileStack};
+use super::use_expand::UseExpand;
+use super::util;
 
 /// A Gentoo ebuild repository.
 ///
@@ -546,80 +545,6 @@ impl Repository {
             }
         }
         Ok(result)
-    }
-
-    /// Create an [`EbuildShell`] configured for this repository.
-    ///
-    /// The shell will have eclass directories set up based on the repository
-    /// layout (this repo's `eclass/` directory).
-    pub async fn shell(&self) -> Result<EbuildShell> {
-        EbuildShell::new(self).await
-    }
-
-    /// Create an [`EbuildShell`] with master repository eclass directories.
-    ///
-    /// Master eclass directories are prepended (searched first), matching
-    /// Portage's resolution order. The overlay's own `eclass/` directory
-    /// is searched last.
-    ///
-    /// See [PMS 4.7](https://projects.gentoo.org/pms/9/pms.html#tree-layout)
-    /// and [PMS 10.1](https://projects.gentoo.org/pms/9/pms.html#eclasses).
-    pub async fn shell_with_masters(&self, masters: &[&Repository]) -> Result<EbuildShell> {
-        let mut shell = EbuildShell::new(self).await?;
-        // Prepend master eclass dirs in reverse order so the first master
-        // ends up at position 0 (highest priority among masters).
-        for master in masters.iter().rev() {
-            let dir = master.path().join("eclass");
-            if dir.is_dir() {
-                shell.prepend_eclass_dir(dir);
-            }
-        }
-        Ok(shell)
-    }
-
-    /// Like [`shell_with_masters`](Self::shell_with_masters) but shares an
-    /// eclass AST cache across all created shells.
-    pub async fn shell_with_masters_and_cache(
-        &self,
-        masters: &[&Repository],
-        cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
-    ) -> Result<EbuildShell> {
-        let mut shell = EbuildShell::new_with_cache(self, cache).await?;
-        for master in masters.iter().rev() {
-            let dir = master.path().join("eclass");
-            if dir.is_dir() {
-                shell.prepend_eclass_dir(dir);
-            }
-        }
-        Ok(shell)
-    }
-
-    /// Create an [`EbuildShell`] with a profile's USE configuration applied.
-    ///
-    /// `profile_rel_path` is relative to the repository's `profiles/` directory,
-    /// e.g. `"default/linux/amd64/17.1"`.
-    ///
-    /// `make_conf` is an optional path to a `make.conf`-style shell script
-    /// (typically `/etc/portage/make.conf`). When provided it is sourced after
-    /// the profile `make.defaults` chain but before `use.force`/`use.mask`,
-    /// matching Portage's USE flag precedence order.
-    ///
-    /// To also include master repository eclasses, create the shell with
-    /// [`Repository::shell_with_masters`] and then call [`ProfileStack::configure_shell`]
-    /// manually.
-    ///
-    /// See [PMS 5.2](https://projects.gentoo.org/pms/9/pms.html#profiles).
-    pub async fn shell_with_profile(
-        &self,
-        profile_rel_path: &str,
-        make_conf: Option<&std::path::Path>,
-    ) -> Result<EbuildShell> {
-        let path = self.path.join("profiles").join(profile_rel_path);
-        let stack = ProfileStack::build(path.into())?;
-        let mut shell = EbuildShell::new(self).await?;
-        let confs: Vec<&std::path::Path> = make_conf.into_iter().collect();
-        stack.configure_shell(&mut shell, &confs).await?;
-        Ok(shell)
     }
 
     /// Open a repository, resolving its master repositories from `repos_dir`.
