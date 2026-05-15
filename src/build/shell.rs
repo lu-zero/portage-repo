@@ -15,7 +15,7 @@ use super::builtins;
 use crate::repo::ebuild::Ebuild;
 use crate::error::{Error, Result};
 use super::inherit;
-use super::pms_builtins;
+use super::commands;
 use crate::repo::repository::Repository;
 use super::ver_funcs;
 
@@ -583,96 +583,96 @@ impl EbuildShell {
         for (name, builtin) in [
             (
                 "die",
-                brush_core::builtins::builtin::<pms_builtins::DieCommand, _>(),
+                brush_core::builtins::builtin::<commands::DieCommand, _>(),
             ),
             (
                 "EXPORT_FUNCTIONS",
-                brush_core::builtins::builtin::<pms_builtins::ExportFunctionsCommand, _>(),
+                brush_core::builtins::builtin::<commands::ExportFunctionsCommand, _>(),
             ),
             (
                 "has",
-                brush_core::builtins::builtin::<pms_builtins::HasCommand, _>(),
+                brush_core::builtins::builtin::<commands::HasCommand, _>(),
             ),
             (
                 "hasv",
-                brush_core::builtins::builtin::<pms_builtins::HasvCommand, _>(),
+                brush_core::builtins::builtin::<commands::HasvCommand, _>(),
             ),
             (
                 "hasq",
-                brush_core::builtins::builtin::<pms_builtins::HasCommand, _>(),
+                brush_core::builtins::builtin::<commands::HasCommand, _>(),
             ),
             (
                 "use",
-                brush_core::builtins::builtin::<pms_builtins::UseCommand, _>(),
+                brush_core::builtins::builtin::<commands::UseCommand, _>(),
             ),
             (
                 "usev",
-                brush_core::builtins::builtin::<pms_builtins::UsevCommand, _>(),
+                brush_core::builtins::builtin::<commands::UsevCommand, _>(),
             ),
             (
                 "usex",
-                brush_core::builtins::builtin::<pms_builtins::UsexCommand, _>(),
+                brush_core::builtins::builtin::<commands::UsexCommand, _>(),
             ),
             (
                 "use_enable",
-                brush_core::builtins::builtin::<pms_builtins::UseEnableCommand, _>(),
+                brush_core::builtins::builtin::<commands::UseEnableCommand, _>(),
             ),
             (
                 "use_with",
-                brush_core::builtins::builtin::<pms_builtins::UseWithCommand, _>(),
+                brush_core::builtins::builtin::<commands::UseWithCommand, _>(),
             ),
             (
                 "in_iuse",
-                brush_core::builtins::builtin::<pms_builtins::InIuseCommand, _>(),
+                brush_core::builtins::builtin::<commands::InIuseCommand, _>(),
             ),
         ] {
             shell.register_builtin(name, builtin);
         }
 
         // Register 74 ___eapi_* EAPI predicate builtins (portage eapi.sh).
-        for &name in pms_builtins::EAPI_PREDICATE_NAMES {
+        for &name in commands::EAPI_PREDICATE_NAMES {
             shell.register_builtin(
                 name,
-                brush_core::builtins::builtin::<pms_builtins::EapiPredicateCommand, _>(),
+                brush_core::builtins::builtin::<commands::EapiPredicateCommand, _>(),
             );
         }
 
         // Register phase-setup builtin (__ebuild_phase_funcs).
         shell.register_builtin(
             "__ebuild_phase_funcs",
-            brush_core::builtins::builtin::<pms_builtins::EbuildPhaseFuncsCommand, _>(),
+            brush_core::builtins::builtin::<commands::EbuildPhaseFuncsCommand, _>(),
         );
 
         // Register P1 output helper builtins (einfo, ewarn, …).
         for &name in &["einfo", "elog", "ewarn", "eerror", "eqawarn", "einfon"] {
             shell.register_builtin(
                 name,
-                brush_core::builtins::builtin::<pms_builtins::EchoMessageCommand, _>(),
+                brush_core::builtins::builtin::<commands::EchoMessageCommand, _>(),
             );
         }
         shell.register_builtin(
             "ebegin",
-            brush_core::builtins::builtin::<pms_builtins::EbeginCommand, _>(),
+            brush_core::builtins::builtin::<commands::EbeginCommand, _>(),
         );
         shell.register_builtin(
             "eend",
-            brush_core::builtins::builtin::<pms_builtins::EendCommand, _>(),
+            brush_core::builtins::builtin::<commands::EendCommand, _>(),
         );
 
         // Register P2 build helper builtins (emake, econf).
         shell.register_builtin(
             "emake",
-            brush_core::builtins::builtin::<pms_builtins::EmakeCommand, _>(),
+            brush_core::builtins::builtin::<commands::EmakeCommand, _>(),
         );
         shell.register_builtin(
             "econf",
-            brush_core::builtins::builtin::<pms_builtins::EconfCommand, _>(),
+            brush_core::builtins::builtin::<commands::EconfCommand, _>(),
         );
 
         // Register P4 unpack builtin.
         shell.register_builtin(
             "unpack",
-            brush_core::builtins::builtin::<pms_builtins::UnpackCommand, _>(),
+            brush_core::builtins::builtin::<commands::UnpackCommand, _>(),
         );
 
         // Register PMS 12.3.14 version manipulation builtins.
@@ -696,7 +696,7 @@ impl EbuildShell {
         // empty during metadata extraction.
         shell.register_builtin(
             "ver_replacing",
-            brush_core::builtins::builtin::<pms_builtins::VerReplacingCommand, _>(),
+            brush_core::builtins::builtin::<ver_funcs::VerReplacingCommand, _>(),
         );
 
         let mut ebuild_shell = EbuildShell {

@@ -544,6 +544,31 @@ impl builtins::Command for VerTestCommand {
     }
 }
 
+// ── ver_replacing ─────────────────────────────────────────────────────────────
+
+/// `ver_replacing`  (PMS 12.3.14 / EAPI 9)
+///
+/// Outputs the versions being replaced, one per line.  During metadata
+/// extraction no package is being replaced, so the output is always empty.
+///
+/// See [PMS 12.3.14](https://projects.gentoo.org/pms/9/pms.html#ver-funcs).
+#[derive(Parser)]
+pub(crate) struct VerReplacingCommand {}
+
+impl builtins::Command for VerReplacingCommand {
+    type State = ();
+    type SharedState = ();
+    type Error = brush_core::Error;
+
+    async fn execute<SE: brush_core::ShellExtensions>(
+        &self,
+        _context: brush_core::ExecutionContext<'_, SE>,
+    ) -> Result<brush_core::ExecutionResult, Self::Error> {
+        // No package is being replaced during metadata extraction.
+        Ok(brush_core::ExecutionResult::new(0))
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
