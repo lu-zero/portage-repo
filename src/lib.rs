@@ -34,11 +34,10 @@
 //! > surprising edge-case behaviour. Use at your own risk.
 
 mod error;
-pub mod repo;
-pub mod build;
+pub(crate) mod repo;
+pub(crate) mod build;
 
-// Backwards-compatible re-export of `inherit` at the crate root.
-pub use build::inherit as inherit;
+pub use build::inherit;
 
 pub use error::{Error, Result};
 
