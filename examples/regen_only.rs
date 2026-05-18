@@ -43,6 +43,9 @@ struct Args {
     /// Number of parallel workers (default: available CPUs)
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
+    /// Deduplicate top-level dep entries before writing (matches pkgcraft output)
+    #[arg(long)]
+    dedup: bool,
 }
 
 fn eclass_md5(path: &Path, cache: &EclassChecksumCache) -> Result<md5::Digest, String> {
@@ -89,6 +92,7 @@ async fn process_ebuild(
     masters: &[Repository],
     ebuild: &Ebuild,
     out_dir: Option<&PathBuf>,
+    dedup: bool,
     eclass_cache: &EclassChecksumCache,
     ast_cache: &EclassAstCache,
 ) -> Result<(), String> {
@@ -102,6 +106,8 @@ async fn process_ebuild(
         .source_ebuild(ebuild)
         .await
         .map_err(|e| format!("source: {e}"))?;
+
+    let metadata = if dedup { metadata.dedup() } else { metadata };
 
     if let Some(dir) = out_dir {
         let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
@@ -188,6 +194,7 @@ async fn main() {
     let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
     let repo = Arc::new(repo);
     let out_dir = Arc::new(args.output);
+    let dedup = args.dedup;
     let errors = Arc::new(AtomicUsize::new(0));
     let eclass_cache: EclassChecksumCache = Arc::new(Mutex::new(HashMap::new()));
     let ast_cache: EclassAstCache = Arc::new(papaya::HashMap::new());
@@ -208,6 +215,7 @@ async fn main() {
                     &masters,
                     &ebuild,
                     out_dir.as_ref().as_ref(),
+                    dedup,
                     &eclass_cache,
                     &ast_cache,
                 )
