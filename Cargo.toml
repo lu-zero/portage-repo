@@ -53,3 +53,6 @@ inherits = "release"
 debug = 1
 lto = false
 
+[patch.crates-io]
+portage-metadata = { path = "../portage-metadata" }
+

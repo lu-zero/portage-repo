@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use clap::Parser;
 use portage_atom::DepEntry;
-use portage_metadata::SrcUriEntry;
+use portage_metadata::{LicenseExpr, RequiredUseExpr, SrcUriEntry};
 
 // ── Field classification ──────────────────────────────────────────────────────
 
@@ -39,7 +39,6 @@ const DEP_FIELDS: &[&str] = &[
     "BDEPEND",
     "PDEPEND",
     "IDEPEND",
-    "LICENSE",
     "RESTRICT",
     "PROPERTIES",
     "REQUIRED_USE",
@@ -59,6 +58,11 @@ struct Args {
     /// Number of parallel workers (default: available CPUs)
     #[arg(short = 'j', long)]
     jobs: Option<usize>,
+    /// Deduplicate top-level dep entries before comparing.
+    /// Use when comparing portage/egencache output (preserves duplicates)
+    /// against pkgcraft output (deduplicates).
+    #[arg(long)]
+    dedup: bool,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -81,13 +85,19 @@ fn eclasses_name_set(val: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn normalize_src_uri(entries: &[SrcUriEntry]) -> String {
-    let mut parts: Vec<String> = entries.iter().map(normalize_src_entry).collect();
+fn normalize_src_uri(entries: &[SrcUriEntry], dedup: bool) -> String {
+    let mut parts: Vec<String> = entries
+        .iter()
+        .map(|e| normalize_src_entry(e, dedup))
+        .collect();
     parts.sort();
+    if dedup {
+        parts.dedup();
+    }
     parts.join(" ")
 }
 
-fn normalize_src_entry(e: &SrcUriEntry) -> String {
+fn normalize_src_entry(e: &SrcUriEntry, dedup: bool) -> String {
     match e {
         SrcUriEntry::Uri {
             url, restriction, ..
@@ -113,10 +123,10 @@ fn normalize_src_entry(e: &SrcUriEntry) -> String {
             } else {
                 format!("{flag}?")
             };
-            format!("{prefix} ( {} )", normalize_src_uri(entries))
+            format!("{prefix} ( {} )", normalize_src_uri(entries, dedup))
         }
         SrcUriEntry::Group(entries) => {
-            format!("( {} )", normalize_src_uri(entries))
+            format!("( {} )", normalize_src_uri(entries, dedup))
         }
     }
 }
@@ -149,10 +159,133 @@ fn normalize_dep_entry(e: &DepEntry) -> String {
     }
 }
 
-fn normalize_dep(s: &str) -> String {
-    DepEntry::parse(s)
-        .map(|e| normalize_dep_entries(&e))
-        .unwrap_or_else(|_| s.to_owned())
+fn dedup_dep_recursive(entries: Vec<DepEntry>) -> Vec<DepEntry> {
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .filter(|e| seen.insert(e.clone()))
+        .map(|e| match e {
+            DepEntry::UseConditional { flag, negate, children } => DepEntry::UseConditional {
+                flag,
+                negate,
+                children: dedup_dep_recursive(children),
+            },
+            DepEntry::AllOf(ch) => DepEntry::AllOf(dedup_dep_recursive(ch)),
+            DepEntry::AnyOf(ch) => DepEntry::AnyOf(dedup_dep_recursive(ch)),
+            DepEntry::ExactlyOneOf(ch) => DepEntry::ExactlyOneOf(dedup_dep_recursive(ch)),
+            DepEntry::AtMostOneOf(ch) => DepEntry::AtMostOneOf(dedup_dep_recursive(ch)),
+            atom => atom,
+        })
+        .collect()
+}
+
+fn normalize_dep(s: &str, dedup: bool) -> String {
+    if let Ok(entries) = DepEntry::parse(s) {
+        let entries = if dedup {
+            dedup_dep_recursive(entries)
+        } else {
+            entries
+        };
+        normalize_dep_entries(&entries)
+    } else if let Ok(ru) = RequiredUseExpr::parse(s) {
+        let ru = if dedup { ru.dedup() } else { ru };
+        match &ru {
+            RequiredUseExpr::All(entries) => normalize_required_use_entries(entries),
+            _ => normalize_required_use_entry(&ru),
+        }
+    } else {
+        s.to_owned()
+    }
+}
+
+fn normalize_license_entries(entries: &[LicenseExpr]) -> String {
+    let mut parts: Vec<String> = entries.iter().map(normalize_license_entry).collect();
+    parts.sort();
+    parts.join(" ")
+}
+
+fn normalize_license_entry(e: &LicenseExpr) -> String {
+    match e {
+        LicenseExpr::License(name) => name.clone(),
+        LicenseExpr::AnyOf(entries) => format!("|| ( {} )", normalize_license_entries(entries)),
+        LicenseExpr::UseConditional {
+            flag,
+            negated,
+            entries,
+        } => {
+            let prefix = if *negated {
+                format!("!{flag}?")
+            } else {
+                format!("{flag}?")
+            };
+            format!("{prefix} ( {} )", normalize_license_entries(entries))
+        }
+        LicenseExpr::All(entries) => normalize_license_entries(entries),
+    }
+}
+
+fn normalize_license(s: &str, dedup: bool) -> String {
+    if let Ok(lic) = LicenseExpr::parse(s) {
+        let lic = if dedup { lic.dedup() } else { lic };
+        match &lic {
+            LicenseExpr::All(entries) => normalize_license_entries(entries),
+            _ => normalize_license_entry(&lic),
+        }
+    } else {
+        s.to_owned()
+    }
+}
+
+fn normalize_required_use_entries(entries: &[RequiredUseExpr]) -> String {
+    let mut parts: Vec<String> = entries.iter().map(normalize_required_use_entry).collect();
+    parts.sort();
+    parts.join(" ")
+}
+
+fn normalize_required_use_entry(e: &RequiredUseExpr) -> String {
+    match e {
+        RequiredUseExpr::Flag { name, negated } => {
+            if *negated {
+                format!("!{name}")
+            } else {
+                name.clone()
+            }
+        }
+        RequiredUseExpr::AnyOf(entries) => {
+            format!("|| ( {} )", normalize_required_use_entries(entries))
+        }
+        RequiredUseExpr::ExactlyOne(entries) => {
+            format!("^^ ( {} )", normalize_required_use_entries(entries))
+        }
+        RequiredUseExpr::AtMostOne(entries) => {
+            format!("?? ( {} )", normalize_required_use_entries(entries))
+        }
+        RequiredUseExpr::UseConditional {
+            flag,
+            negated,
+            entries,
+        } => {
+            let prefix = if *negated {
+                format!("!{flag}?")
+            } else {
+                format!("{flag}?")
+            };
+            format!("{prefix} ( {} )", normalize_required_use_entries(entries))
+        }
+        RequiredUseExpr::All(entries) => normalize_required_use_entries(entries),
+    }
+}
+
+fn normalize_required_use(s: &str, dedup: bool) -> String {
+    if let Ok(ru) = RequiredUseExpr::parse(s) {
+        let ru = if dedup { ru.dedup() } else { ru };
+        match &ru {
+            RequiredUseExpr::All(entries) => normalize_required_use_entries(entries),
+            _ => normalize_required_use_entry(&ru),
+        }
+    } else {
+        s.to_owned()
+    }
 }
 
 // ── Cache file parsing ────────────────────────────────────────────────────────
@@ -184,6 +317,7 @@ fn compare_cache_entries(
     cpv: &str,
     map_a: &BTreeMap<String, String>,
     map_b: &BTreeMap<String, String>,
+    dedup: bool,
 ) -> Vec<FileDiff> {
     let mut diffs = Vec::new();
     let empty = String::new();
@@ -217,8 +351,8 @@ fn compare_cache_entries(
     for &key in DEP_FIELDS {
         let va = map_a.get(key).unwrap_or(&empty);
         let vb = map_b.get(key).unwrap_or(&empty);
-        let na = normalize_dep(va);
-        let nb = normalize_dep(vb);
+        let na = normalize_dep(va, dedup);
+        let nb = normalize_dep(vb, dedup);
         if na != nb {
             diffs.push(FileDiff {
                 cpv: cpv.to_owned(),
@@ -230,13 +364,28 @@ fn compare_cache_entries(
     }
 
     {
+        let va = map_a.get("LICENSE").unwrap_or(&empty);
+        let vb = map_b.get("LICENSE").unwrap_or(&empty);
+        let na = normalize_license(va, dedup);
+        let nb = normalize_license(vb, dedup);
+        if na != nb {
+            diffs.push(FileDiff {
+                cpv: cpv.to_owned(),
+                field: "LICENSE".to_owned(),
+                a: va.clone(),
+                b: vb.clone(),
+            });
+        }
+    }
+
+    {
         let va = map_a.get("SRC_URI").unwrap_or(&empty);
         let vb = map_b.get("SRC_URI").unwrap_or(&empty);
         let na = SrcUriEntry::parse(va)
-            .map(|e| normalize_src_uri(&e))
+            .map(|e| normalize_src_uri(&e, dedup))
             .unwrap_or_else(|_| va.clone());
         let nb = SrcUriEntry::parse(vb)
-            .map(|e| normalize_src_uri(&e))
+            .map(|e| normalize_src_uri(&e, dedup))
             .unwrap_or_else(|_| vb.clone());
         if na != nb {
             diffs.push(FileDiff {
@@ -267,7 +416,7 @@ fn compare_cache_entries(
         .chain(DEP_FIELDS)
         .chain(EXCLUDE_FIELDS)
         .copied()
-        .chain(["SRC_URI", "_eclasses_"])
+        .chain(["SRC_URI", "LICENSE", "_eclasses_"])
         .collect();
 
     for key in map_a.keys().chain(map_b.keys()) {
@@ -352,6 +501,7 @@ fn main() {
 
     let (tx, rx) = flume::bounded::<(String, PathBuf, PathBuf)>(jobs * 4);
     let progress = Arc::new(AtomicUsize::new(0));
+    let dedup = args.dedup;
 
     let mut handles = Vec::new();
     for _ in 0..jobs {
@@ -364,7 +514,7 @@ fn main() {
                 eprint!("\r[{n}/{total}] {cpv:<60}");
                 let map_a = parse_cache_file(&path_a);
                 let map_b = parse_cache_file(&path_b);
-                all_diffs.extend(compare_cache_entries(&cpv, &map_a, &map_b));
+                all_diffs.extend(compare_cache_entries(&cpv, &map_a, &map_b, dedup));
             }
             all_diffs
         }));
