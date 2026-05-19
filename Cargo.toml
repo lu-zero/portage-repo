@@ -37,11 +37,12 @@ mimalloc = { version = "0.1.50", optional = true }
 camino = "1.2.2"
 papaya = "0.2"
 
+md5 = "0.7"
+
 [dev-dependencies]
 libc = "0.2"
-md5 = "0.7"
 tempfile = "3"
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["macros"] }
 
 [profile.release]
 opt-level = 3

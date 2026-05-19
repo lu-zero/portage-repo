@@ -9,10 +9,11 @@ use std::fs;
 use std::process;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use clap::Parser;
 use portage_metadata::CacheEntry;
-use portage_repo::{Ebuild, Repository};
+use portage_repo::{Ebuild, Repository, SourceContext, SourceOpts, source_parallel};
 
 /// Fields to compare between sourced metadata and the md5-cache.
 ///
@@ -59,7 +60,7 @@ const UNORDERED_KEYS: &[&str] = &[
 
 const STRUCTURAL_TOKENS: &[&str] = &["(", ")", "||", "&&"];
 
-fn token_multiset<'a>(s: &'a str) -> BTreeMap<&'a str, usize> {
+fn token_multiset(s: &str) -> BTreeMap<&str, usize> {
     let mut map = BTreeMap::new();
     for tok in s.split_whitespace() {
         *map.entry(tok).or_insert(0) += 1;
@@ -108,146 +109,11 @@ fn matches_filter(cpv: &str, filter: &str) -> bool {
     }
 }
 
-#[derive(Default)]
-struct Stats {
-    total: usize,
-    success: usize,
-    errors: usize,
-    mismatches: usize,
-    missing_cache: usize,
-}
-
-impl Stats {
-    fn merge(&mut self, other: Stats) {
-        self.total += other.total;
-        self.success += other.success;
-        self.errors += other.errors;
-        self.mismatches += other.mismatches;
-        self.missing_cache += other.missing_cache;
-    }
-}
-
 struct FieldDiff {
     cpv: String,
     key: String,
     expected: String,
     got: String,
-}
-
-async fn process_ebuild(
-    repo: &Repository,
-    masters: &[Repository],
-    ebuild: &Ebuild,
-    progress: &AtomicUsize,
-    total: usize,
-    quiet: bool,
-    eclass_cache: &Arc<papaya::HashMap<String, brush_parser::ast::Program>>,
-) -> (Stats, Vec<FieldDiff>) {
-    let mut stats = Stats::default();
-    let mut diffs = Vec::new();
-    stats.total = 1;
-
-    let cpv = ebuild.cpv();
-    let cpv_str = cpv.to_string();
-    let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
-    if !quiet {
-        eprint!("\r[{i}/{total}] {cpv_str:<60}");
-    }
-
-    let master_refs: Vec<&Repository> = masters.iter().collect();
-    let mut shell = match repo
-        .shell_with_masters_and_cache(&master_refs, eclass_cache.clone())
-        .await
-    {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("\nERROR creating shell for {cpv_str}: {e}");
-            stats.errors += 1;
-            return (stats, diffs);
-        }
-    };
-
-    let metadata = match shell.source_ebuild(ebuild).await {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("\nERROR sourcing {cpv_str}: {e}");
-            stats.errors += 1;
-            return (stats, diffs);
-        }
-    };
-
-    let reference = match repo.cache_entry(cpv) {
-        Ok(c) => c,
-        Err(_) => {
-            eprintln!("\nMISSING cache for {cpv_str}");
-            stats.missing_cache += 1;
-            stats.success += 1;
-            return (stats, diffs);
-        }
-    };
-
-    let ebuild_md5 = fs::read(ebuild.path())
-        .map(|b| format!("{:x}", md5::compute(&b)))
-        .ok();
-
-    let mut eclasses = Vec::new();
-    for name in &metadata.inherited {
-        if let Some(path) = shell.eclass_path(name) {
-            if let Ok(data) = fs::read(&path) {
-                eclasses.push((name.clone(), format!("{:x}", md5::compute(&data))));
-            }
-        }
-    }
-
-    let sourced_entry = CacheEntry {
-        metadata,
-        md5: ebuild_md5,
-        eclasses,
-    };
-
-    let ref_serialized = reference.serialize();
-    let src_serialized = sourced_entry.serialize();
-
-    let ref_map = parse_cache_map(&ref_serialized);
-    let src_map = parse_cache_map(&src_serialized);
-
-    let mut has_diff = false;
-    for &key in COMPARE_KEYS {
-        let ref_val = ref_map.get(key).copied().unwrap_or("");
-        let src_val = src_map.get(key).copied().unwrap_or("");
-
-        if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
-            let dups = find_extra_duplicates(ref_val, src_val);
-            if !dups.is_empty() {
-                eprintln!(
-                    "\nWARN {cpv_str} {key}: extra duplicate tokens (not in reference): {}",
-                    dups.join(", ")
-                );
-            }
-        }
-
-        let differs = if UNORDERED_KEYS.contains(&key) {
-            token_multiset(ref_val) != token_multiset(src_val)
-        } else {
-            ref_val != src_val
-        };
-
-        if differs {
-            has_diff = true;
-            diffs.push(FieldDiff {
-                cpv: cpv_str.clone(),
-                key: key.to_string(),
-                expected: ref_val.to_string(),
-                got: src_val.to_string(),
-            });
-        }
-    }
-
-    if has_diff {
-        stats.mismatches += 1;
-    }
-    stats.success += 1;
-    (stats, diffs)
 }
 
 #[derive(Parser)]
@@ -311,82 +177,159 @@ async fn main() {
         }
     };
 
-    let ebuilds = if let Some(ref f) = args.filter {
+    let ebuilds: Vec<Ebuild> = if let Some(ref f) = args.filter {
         let f = f.clone();
-        ebuilds.filter(move |eb| matches_filter(&eb.cpv().to_string(), &f)).collect_vec()
+        ebuilds
+            .into_iter()
+            .filter(move |eb| matches_filter(&eb.cpv().to_string(), &f))
+            .collect()
     } else {
-        ebuilds.collect_vec()
+        ebuilds.into_iter().collect()
     };
 
     let total = ebuilds.len();
     eprintln!("Found {total} ebuilds to process with {jobs} workers.");
 
-    let (tx, rx) = flume::bounded::<Ebuild>(jobs * 2);
     let repo = Arc::new(repo);
-    let masters = Arc::new(masters);
     let progress = Arc::new(AtomicUsize::new(0));
-    let eclass_cache: Arc<papaya::HashMap<String, brush_parser::ast::Program>> =
-        Arc::new(papaya::HashMap::new());
+    let errors = Arc::new(AtomicUsize::new(0));
+    let mismatches = Arc::new(AtomicUsize::new(0));
+    let missing_cache = Arc::new(AtomicUsize::new(0));
+    let success = Arc::new(AtomicUsize::new(0));
+    let diffs: Arc<Mutex<Vec<FieldDiff>>> = Arc::new(Mutex::new(Vec::new()));
 
+    let ctx = SourceContext::new();
+    let opts = SourceOpts { jobs: Some(jobs), dedup: false };
 
+    source_parallel(
+        &repo,
+        &masters,
+        ebuilds,
+        &opts,
+        &ctx,
+        {
+            let repo = Arc::clone(&repo);
+            let progress = Arc::clone(&progress);
+            let errors = Arc::clone(&errors);
+            let mismatches = Arc::clone(&mismatches);
+            let missing_cache = Arc::clone(&missing_cache);
+            let success = Arc::clone(&success);
+            let diffs = Arc::clone(&diffs);
+            let quiet = args.quiet;
 
-    let mut handles = Vec::new();
-    for _ in 0..jobs {
-        let rx = rx.clone();
-        let repo = Arc::clone(&repo);
-        let masters = Arc::clone(&masters);
-        let progress = Arc::clone(&progress);
-        let eclass_cache = Arc::clone(&eclass_cache);
-        let quiet = args.quiet;
-        handles.push(tokio::spawn(async move {
-            let mut stats = Stats::default();
-            let mut diffs = Vec::new();
-            while let Ok(ebuild) = rx.recv_async().await {
-                let (s, d) = process_ebuild(
-                    &repo,
-                    &masters,
-                    &ebuild,
-                    &progress,
-                    total,
-                    quiet,
-                    &eclass_cache,
-                )
-                .await;
-                stats.merge(s);
-                diffs.extend(d);
+            move |ebuild, result| {
+                let i = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                let cpv = ebuild.cpv();
+                let cpv_str = cpv.to_string();
+                if !quiet {
+                    eprint!("\r[{i}/{total}] {cpv_str:<60}");
+                }
+
+                let metadata = match result {
+                    Err(e) => {
+                        eprintln!("\nERROR sourcing {cpv_str}: {e}");
+                        errors.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    Ok(m) => m,
+                };
+
+                let reference = match repo.cache_entry(cpv) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        eprintln!("\nMISSING cache for {cpv_str}");
+                        missing_cache.fetch_add(1, Ordering::Relaxed);
+                        success.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                };
+
+                let ebuild_md5 = fs::read(ebuild.path())
+                    .map(|b| format!("{:x}", md5::compute(&b)))
+                    .ok();
+
+                let eclass_dir = ebuild
+                    .path()
+                    .ancestors()
+                    .find(|p| p.join("eclass").is_dir())
+                    .map(|p| p.join("eclass"));
+
+                let eclasses: Vec<(String, String)> = metadata
+                    .inherited
+                    .iter()
+                    .filter_map(|name| {
+                        let path = eclass_dir.as_ref()?.join(format!("{name}.eclass"));
+                        fs::read(&path)
+                            .ok()
+                            .map(|data| (name.clone(), format!("{:x}", md5::compute(&data))))
+                    })
+                    .collect();
+
+                let sourced_entry = CacheEntry { metadata, md5: ebuild_md5, eclasses };
+
+                let ref_serialized = reference.serialize();
+                let src_serialized = sourced_entry.serialize();
+
+                let ref_map = parse_cache_map(&ref_serialized);
+                let src_map = parse_cache_map(&src_serialized);
+
+                let mut has_diff = false;
+                let mut new_diffs = Vec::new();
+                for &key in COMPARE_KEYS {
+                    let ref_val = ref_map.get(key).copied().unwrap_or("");
+                    let src_val = src_map.get(key).copied().unwrap_or("");
+
+                    if UNORDERED_KEYS.contains(&key) && !src_val.is_empty() {
+                        let dups = find_extra_duplicates(ref_val, src_val);
+                        if !dups.is_empty() {
+                            eprintln!(
+                                "\nWARN {cpv_str} {key}: extra duplicate tokens: {}",
+                                dups.join(", ")
+                            );
+                        }
+                    }
+
+                    let differs = if UNORDERED_KEYS.contains(&key) {
+                        token_multiset(ref_val) != token_multiset(src_val)
+                    } else {
+                        ref_val != src_val
+                    };
+
+                    if differs {
+                        has_diff = true;
+                        new_diffs.push(FieldDiff {
+                            cpv: cpv_str.clone(),
+                            key: key.to_string(),
+                            expected: ref_val.to_string(),
+                            got: src_val.to_string(),
+                        });
+                    }
+                }
+
+                if has_diff {
+                    mismatches.fetch_add(1, Ordering::Relaxed);
+                    diffs.lock().unwrap().extend(new_diffs);
+                }
+                success.fetch_add(1, Ordering::Relaxed);
             }
-            (stats, diffs)
-        }));
-    }
-    drop(rx);
-
-    for ebuild in ebuilds {
-        if tx.send(ebuild).is_err() {
-            break;
-        }
-    }
-    drop(tx);
-
-    let mut stats = Stats::default();
-    stats.total = total;
-    let mut diffs = Vec::new();
-    for handle in handles {
-        let (s, d) = handle.await.unwrap();
-        stats.success += s.success;
-        stats.errors += s.errors;
-        stats.mismatches += s.mismatches;
-        stats.missing_cache += s.missing_cache;
-        diffs.extend(d);
-    }
+        },
+    )
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("\nFatal error: {e}");
+        process::exit(1);
+    });
 
     if !args.quiet {
         eprintln!();
     }
 
-    if !diffs.is_empty() {
-        diffs.sort_by(|a, b| a.cpv.cmp(&b.cpv).then(a.key.cmp(&b.key)));
+    let mut all_diffs = diffs.lock().unwrap();
+    all_diffs.sort_by(|a, b| a.cpv.cmp(&b.cpv).then(a.key.cmp(&b.key)));
+
+    if !all_diffs.is_empty() {
         eprintln!("=== Field diffs ===");
-        for d in &diffs {
+        for d in all_diffs.iter() {
             eprintln!("DIFF {} {}:", d.cpv, d.key);
             eprintln!("  cache: {}", d.expected);
             eprintln!("  got:   {}", d.got);
@@ -394,12 +337,15 @@ async fn main() {
         eprintln!();
     }
 
+    let err_count = errors.load(Ordering::Relaxed);
+    let mismatch_count = mismatches.load(Ordering::Relaxed);
+
     println!("=== Results ===");
-    println!("Total:         {}", stats.total);
-    println!("Sourced OK:    {}", stats.success);
-    println!("Errors:        {}", stats.errors);
-    println!("Mismatches:    {}", stats.mismatches);
-    println!("Missing cache: {}", stats.missing_cache);
+    println!("Total:         {total}");
+    println!("Sourced OK:    {}", success.load(Ordering::Relaxed));
+    println!("Errors:        {err_count}");
+    println!("Mismatches:    {mismatch_count}");
+    println!("Missing cache: {}", missing_cache.load(Ordering::Relaxed));
 
     let (hits, misses) = portage_repo::inherit::cache_stats();
     let total_lookups = hits + misses;
@@ -412,7 +358,7 @@ async fn main() {
         );
     }
 
-    if stats.errors > 0 || stats.mismatches > 0 {
+    if err_count > 0 || mismatch_count > 0 {
         process::exit(1);
     }
 }

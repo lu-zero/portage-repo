@@ -36,6 +36,8 @@
 mod error;
 pub(crate) mod repo;
 pub(crate) mod build;
+pub mod source;
+pub mod cache;
 
 pub use build::inherit;
 
@@ -55,3 +57,6 @@ pub use repo::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
 pub use repo::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
 pub use build::EbuildShell;
 pub use repo::UseExpand;
+pub use source::{SourceContext, SourceOpts, source_parallel, source_single};
+pub use cache::{RegenOpts, RegenStats, regen_cache};
+pub use portage_metadata::EbuildMetadata;
