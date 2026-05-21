@@ -23,3 +23,14 @@
 | +interned Keyword/IUse       | 7.83s  | 6.92s  | 4.90s  | 48 MB  | 2026-03-09 |
 | +portage-atom 0.5, gentoo-   | 7.47s  | 6.73s  | 5.23s  | 48 MB  | 2026-03-15 |
 |   core direct in portage-repo|        |        |        |        |            |
+
+## Linux full-tree baseline (regen_only, /var/db/repos/gentoo, ~70k ebuilds)
+# portage-atom 0.9, portage-metadata 0.7, gentoo-interner 0.2 (papaya backend)
+# bench-regen.sh 1 20 24 32 on Linux ~32-core machine
+
+| j  | real      | user      | sys      | peak RSS | date       |
+|----|-----------|-----------|----------|----------|------------|
+| 1  | 2m28.258s | 2m20.993s | 0m6.665s | 135 MB   | 2026-05-20 |
+| 20 | 0m11.571s | 3m14.192s | 0m18.655s| 242 MB   | 2026-05-20 |
+| 24 | 0m10.706s | 3m22.243s | 0m21.700s| 264 MB   | 2026-05-20 |
+| 32 | 0m11.918s | 4m19.362s | 0m31.535s| 305 MB   | 2026-05-20 |

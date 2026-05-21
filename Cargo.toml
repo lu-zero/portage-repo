@@ -13,13 +13,13 @@ categories = ["parser-implementations", "development-tools"]
 [features]
 dhat-heap = ["dep:dhat"]
 mimalloc = ["dep:mimalloc"]
-lasso = ["gentoo-interner/lasso"]
+lasso = ["portage-atom/lasso", "portage-metadata/lasso"]
+symbol-table = ["portage-atom/symbol-table", "portage-metadata/symbol-table"]
 
 [dependencies]
-portage-atom = "0.8"
-portage-metadata = "0.6"
-gentoo-interner = "0.1"
-gentoo-core = "0.4"
+portage-atom = "0.9"
+portage-metadata = "0.7"
+gentoo-core = "0.5"
 brush-core = { path = "../brush/brush-core", features = ["experimental-parser"] }
 brush-builtins = { path = "../brush/brush-builtins" }
 brush-parser = { path = "../brush/brush-parser" }
@@ -57,6 +57,7 @@ debug = 1
 lto = false
 
 [patch.crates-io]
+portage-atom = { path = "../portage-atom" }
 portage-metadata = { path = "../portage-metadata" }
 gentoo-interner = { path = "../gentoo-interner" }
 

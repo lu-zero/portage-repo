@@ -2,16 +2,43 @@
 # bench-regen.sh — benchmark regen_only at multiple thread counts
 # Usage: bench-regen.sh [jobs...]   (default: 4 8 16 20 24 32 40)
 #   GENTOO_REPO=<path>  override repo path
+#   DEDUP=1             pass --dedup to regen_only
+#   LASSO=1             build with --features lasso (lasso interner)
+#   SYMBOL_TABLE=1      build with --features symbol-table (symbol-table interner)
+#   MIMALLOC=1          build with --features mimalloc (mimalloc allocator)
+#   DHAT=1              build with --features dhat-heap (dhat profiler)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REGEN="$SCRIPT_DIR/target/release/examples/regen_only"
 REPO="${GENTOO_REPO:-/var/db/repos/gentoo}"
+DEDUP_FLAG=""
+[[ "${DEDUP:-0}" == "1" ]] && DEDUP_FLAG="--dedup"
 
-if [[ ! -x "$REGEN" ]]; then
-    echo "Building regen_only..." >&2
-    cargo build --release --example regen_only --manifest-path "$SCRIPT_DIR/Cargo.toml"
+# Collect feature flags from environment
+FEATURES=()
+[[ "${LASSO:-0}" == "1" ]] && FEATURES+=("lasso")
+[[ "${SYMBOL_TABLE:-0}" == "1" ]] && FEATURES+=("symbol-table")
+[[ "${MIMALLOC:-0}" == "1" ]] && FEATURES+=("mimalloc")
+[[ "${DHAT:-0}" == "1" ]] && FEATURES+=("dhat-heap")
+
+FEATURE_FLAGS=""
+if [[ ${#FEATURES[@]} -gt 0 ]]; then
+    FEATURE_FLAGS="--features $(IFS=,; echo "${FEATURES[*]}")"
+fi
+
+REGEN="$SCRIPT_DIR/target/release/examples/regen_only"
+
+# Build description for build message
+BUILD_DESC=""
+if [[ ${#FEATURES[@]} -gt 0 ]]; then
+    BUILD_DESC=" (features: $(IFS=,; echo "${FEATURES[*]}"))"
+fi
+
+# Build if binary doesn't exist or features are enabled
+if [[ ! -x "$REGEN" ]] || [[ ${#FEATURES[@]} -gt 0 ]]; then
+    echo "Building regen_only${BUILD_DESC}..." >&2
+    cargo build --release --example regen_only $FEATURE_FLAGS --manifest-path "$SCRIPT_DIR/Cargo.toml"
 fi
 
 if [[ $# -gt 0 ]]; then JOBS=("$@"); else JOBS=(4 8 16 20 24 32 40); fi
@@ -40,7 +67,7 @@ peak_rss() {
 printf "%-4s  %-10s  %-10s  %-10s  %s\n" "j" "real" "user" "sys" "peak RSS"
 for J in "${JOBS[@]}"; do
     OUT=$(mktemp -d)
-    { time "$REGEN" "$REPO" -o "$OUT" -j "$J" >/dev/null 2>&1; } 2>/tmp/bench_time &
+    { time "$REGEN" $DEDUP_FLAG "$REPO" -o "$OUT" -j "$J" >/dev/null 2>&1; } 2>/tmp/bench_time &
     BGPID=$!
     RSS=$(peak_rss "$BGPID")
     wait "$BGPID"
