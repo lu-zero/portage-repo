@@ -6,11 +6,11 @@
 //! The sourcing concern (running bash, extracting metadata) lives in
 //! [`crate::source`]; this module owns the disk I/O side.
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use camino::Utf8Path;
 use portage_metadata::CacheEntry;
@@ -18,7 +18,12 @@ use portage_metadata::CacheEntry;
 use crate::source::{SourceContext, SourceOpts, SourcedEbuild, source_parallel};
 use crate::{Ebuild, Repository, Result};
 
-type ChecksumCache = Arc<Mutex<HashMap<PathBuf, md5::Digest>>>;
+/// Shared eclass file → md5 cache used across all regen workers.
+///
+/// `papaya::HashMap` gives lock-free reads; the first-miss race where two
+/// workers concurrently read and hash the same eclass is benign because
+/// `insert` is atomic and the digests are identical.
+type ChecksumCache = Arc<papaya::HashMap<PathBuf, md5::Digest>>;
 
 /// Options for [`regen_cache`].
 #[derive(Debug, Clone, Default)]
@@ -47,8 +52,23 @@ pub async fn regen_cache(
 ) -> Result<RegenStats> {
     let total = ebuilds.len();
     let out_dir = opts.output_dir.clone();
+
+    // Pre-create one directory per category. Doing this upfront turns ~30k
+    // per-ebuild create_dir_all calls into ~200 (one per category) and lets
+    // the worker loop write without coordinating on directory state.
+    if let Some(ref dir) = out_dir {
+        let mut cats: HashSet<&str> = HashSet::new();
+        for e in &ebuilds {
+            cats.insert(e.category());
+        }
+        for cat in cats {
+            let p = dir.join(cat);
+            fs::create_dir_all(&p).map_err(|e| crate::Error::Io { path: p, source: e })?;
+        }
+    }
+
     let ctx = SourceContext::new();
-    let checksum_cache: ChecksumCache = Arc::new(Mutex::new(HashMap::new()));
+    let checksum_cache: ChecksumCache = Arc::new(papaya::HashMap::new());
     let errors = Arc::new(AtomicUsize::new(0));
     let done = Arc::new(AtomicUsize::new(0));
     let on_progress = Arc::new(on_progress);
@@ -95,26 +115,20 @@ fn eclass_md5(
     path: &Utf8Path,
     cache: &ChecksumCache,
 ) -> std::result::Result<md5::Digest, String> {
-    {
-        let guard = cache.lock().unwrap();
-        if let Some(&d) = guard.get(path.as_std_path()) {
-            return Ok(d);
-        }
+    let pinned = cache.pin();
+    if let Some(&d) = pinned.get(path.as_std_path()) {
+        return Ok(d);
     }
     let data = fs::read(path).map_err(|e| format!("read {path}: {e}"))?;
     let digest = md5::compute(&data);
-    cache
-        .lock()
-        .unwrap()
-        .entry(path.to_path_buf().into_std_path_buf())
-        .or_insert(digest);
+    pinned.insert(path.to_path_buf().into_std_path_buf(), digest);
     Ok(digest)
 }
 
 fn write_entry(
     ebuild: &Ebuild,
     sourced: SourcedEbuild,
-    out_dir: &std::path::Path,
+    out_dir: &Path,
     checksum_cache: &ChecksumCache,
 ) -> std::result::Result<(), String> {
     let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
@@ -135,12 +149,14 @@ fn write_entry(
 
     let entry = CacheEntry { metadata, md5: Some(ebuild_md5), eclasses };
 
+    // Write to `{name}.tmp` then rename — POSIX rename is atomic on the same
+    // filesystem, so a crash mid-write can never leave a truncated cache file.
+    // The category directory already exists (created up front in regen_cache).
     let cat_dir = out_dir.join(ebuild.category());
-    fs::create_dir_all(&cat_dir).map_err(|e| format!("mkdir: {e}"))?;
-    fs::write(
-        cat_dir.join(format!("{}-{}", ebuild.name(), ebuild.version())),
-        entry.serialize(),
-    )
-    .map_err(|e| format!("write: {e}"))?;
+    let file_name = format!("{}-{}", ebuild.name(), ebuild.version());
+    let final_path = cat_dir.join(&file_name);
+    let tmp_path = cat_dir.join(format!("{file_name}.tmp"));
+    fs::write(&tmp_path, entry.serialize()).map_err(|e| format!("write tmp: {e}"))?;
+    fs::rename(&tmp_path, &final_path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }
