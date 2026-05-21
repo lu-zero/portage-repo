@@ -235,11 +235,16 @@ async fn main() {
                 };
 
                 let reference = match repo.cache_entry(cpv) {
-                    Ok(c) => c,
-                    Err(_) => {
+                    Ok(Some(c)) => c,
+                    Ok(None) => {
                         eprintln!("\nMISSING cache for {cpv_str}");
                         missing_cache.fetch_add(1, Ordering::Relaxed);
                         success.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("\nERROR reading cache for {cpv_str}: {e}");
+                        errors.fetch_add(1, Ordering::Relaxed);
                         return;
                     }
                 };

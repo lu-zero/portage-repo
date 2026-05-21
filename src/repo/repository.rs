@@ -266,16 +266,57 @@ impl Repository {
     /// Read a metadata cache entry for the given `Cpv`.
     ///
     /// Reads from `metadata/md5-cache/{category}/{package-version}`.
+    /// Returns `Ok(None)` when no cache file exists for this cpv (the typical
+    /// cache-miss case); other I/O or parse failures still produce `Err`.
     ///
     /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/9/pms.html#metadata-cache).
-    pub fn cache_entry(&self, cpv: &Cpv) -> Result<CacheEntry> {
+    pub fn cache_entry(&self, cpv: &Cpv) -> Result<Option<CacheEntry>> {
         let cache_path = self
             .path
             .join("metadata")
             .join("md5-cache")
             .join(cpv.to_string());
-        let contents = util::read_to_string(cache_path)?;
-        Ok(CacheEntry::parse(&contents)?)
+        match std::fs::read_to_string(&cache_path) {
+            Ok(contents) => Ok(Some(CacheEntry::parse(&contents)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(util::io_err(&cache_path, e)),
+        }
+    }
+
+    /// Verify that `entry`'s recorded eclass checksums still match the live tree.
+    ///
+    /// For every `(name, md5)` in `entry.eclasses`, the eclass is located by
+    /// searching this repository's `eclass/` directory and each master's (in
+    /// order), then its current md5 is compared against the recorded one. An
+    /// entry with no `_eclasses_` is trivially fresh.
+    ///
+    /// This does **not** verify `entry.md5` against the ebuild on disk —
+    /// callers that want that check should compare it themselves (they
+    /// already know which ebuild they're holding metadata for; this method
+    /// has no Cpv to resolve a path from).
+    ///
+    /// Returns `false` if any eclass cannot be located, cannot be read, or
+    /// hashes to a different value than the cache entry records.
+    pub fn is_fresh(&self, entry: &CacheEntry, masters: &[Repository]) -> bool {
+        if entry.eclasses.is_empty() {
+            return true;
+        }
+        let eclass_dirs: Vec<Utf8PathBuf> = std::iter::once(self.path.join("eclass"))
+            .chain(masters.iter().map(|m| m.path.join("eclass")))
+            .collect();
+        for (name, recorded) in &entry.eclasses {
+            let Some(path) = find_eclass_in(&eclass_dirs, name) else {
+                return false;
+            };
+            let Ok(bytes) = std::fs::read(&path) else {
+                return false;
+            };
+            let actual = format!("{:x}", md5::compute(&bytes));
+            if !actual.eq_ignore_ascii_case(recorded) {
+                return false;
+            }
+        }
+        true
     }
 
     /// Parse `profiles/profiles.desc` to get available profile descriptions.
@@ -586,6 +627,18 @@ impl Repository {
     }
 }
 
+/// Locate `{name}.eclass` by searching `dirs` in order (first hit wins).
+fn find_eclass_in(dirs: &[Utf8PathBuf], name: &str) -> Option<Utf8PathBuf> {
+    let filename = format!("{name}.eclass");
+    for dir in dirs {
+        let path = dir.join(&filename);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// List file/directory names in a directory (sorted, skipping dotfiles).
 fn list_dir_names(dir: impl AsRef<Path>) -> Result<Vec<String>> {
     let dir = dir.as_ref();
@@ -779,17 +832,69 @@ mod tests {
         )
         .unwrap();
 
-        let entry = repo.cache_entry(&cpv).unwrap();
+        let entry = repo.cache_entry(&cpv).unwrap().expect("cache file present");
         assert_eq!(entry.metadata.eapi, Eapi::Eight);
         assert_eq!(entry.metadata.description, "test");
     }
 
     #[test]
-    fn cache_entry_missing_file_errors() {
+    fn cache_entry_missing_file_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let repo = make_test_repo(&dir);
         let cpv = Cpv::parse("dev-util/foo-1.0").unwrap();
-        assert!(repo.cache_entry(&cpv).is_err());
+        assert!(repo.cache_entry(&cpv).unwrap().is_none());
+    }
+
+    #[test]
+    fn is_fresh_validates_eclass_md5_across_local_and_masters() {
+        let local_dir = tempfile::tempdir().unwrap();
+        let master_dir = tempfile::tempdir().unwrap();
+        let local = make_test_repo(&local_dir);
+        let master = make_test_repo(&master_dir);
+
+        // Two eclasses: one in local, one only in master.
+        std::fs::create_dir_all(local_dir.path().join("eclass")).unwrap();
+        std::fs::create_dir_all(master_dir.path().join("eclass")).unwrap();
+        std::fs::write(
+            local_dir.path().join("eclass").join("local-only.eclass"),
+            b"local body\n",
+        )
+        .unwrap();
+        std::fs::write(
+            master_dir.path().join("eclass").join("master-only.eclass"),
+            b"master body\n",
+        )
+        .unwrap();
+
+        let local_md5 = format!("{:x}", md5::compute(b"local body\n"));
+        let master_md5 = format!("{:x}", md5::compute(b"master body\n"));
+
+        // Construct a CacheEntry via parse() to avoid hand-building EbuildMetadata.
+        let make_entry = |eclasses: &[(&str, &str)]| {
+            let eclass_field = eclasses
+                .iter()
+                .map(|(n, m)| format!("{n}\t{m}"))
+                .collect::<Vec<_>>()
+                .join("\t");
+            let raw = format!("EAPI=8\nDESCRIPTION=test\nSLOT=0\n_eclasses_={eclass_field}\n");
+            CacheEntry::parse(&raw).unwrap()
+        };
+
+        // Both eclasses present and matching — fresh.
+        let entry = make_entry(&[("local-only", &local_md5), ("master-only", &master_md5)]);
+        assert!(local.is_fresh(&entry, std::slice::from_ref(&master)));
+
+        // Wrong md5 for the master eclass — stale.
+        let entry = make_entry(&[("master-only", "00000000000000000000000000000000")]);
+        assert!(!local.is_fresh(&entry, std::slice::from_ref(&master)));
+
+        // Eclass not findable anywhere — stale.
+        let entry = make_entry(&[("ghost", &local_md5)]);
+        assert!(!local.is_fresh(&entry, std::slice::from_ref(&master)));
+
+        // Empty eclass list — trivially fresh.
+        let entry = make_entry(&[]);
+        assert!(local.is_fresh(&entry, &[]));
     }
 
     #[test]
