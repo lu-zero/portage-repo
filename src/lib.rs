@@ -54,7 +54,7 @@ pub use repo::Package;
 pub use repo::PkgMetadata;
 pub use portage_metadata::interner::{DefaultInterner, GlobalInterner, Interner, NoInterner};
 pub use repo::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
-pub use repo::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
+pub use repo::{CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository};
 pub use build::EbuildShell;
 pub use repo::UseExpand;
 pub use source::{SourceContext, SourceOpts, source_parallel, source_single};

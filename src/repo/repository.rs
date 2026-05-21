@@ -115,6 +115,67 @@ impl Iterator for EbuildsIter {
     }
 }
 
+/// Lazy iterator over every `metadata/md5-cache/{cat}/{name-version}` file.
+///
+/// Produced by [`Repository::cache_entries`]. Each item is a `(Cpv, …)`
+/// tuple; the second element is the parsed entry or the I/O / parse error
+/// for that specific file.
+pub struct CacheEntries {
+    walker: WalkDir,
+}
+
+/// Concrete iterator produced by [`CacheEntries::into_iter`].
+pub struct CacheEntriesIter {
+    inner: jwalk::DirEntryIter<((), ())>,
+}
+
+fn dir_entry_to_cache(
+    entry: jwalk::Result<jwalk::DirEntry<((), ())>>,
+) -> Option<(Cpv, Result<CacheEntry>)> {
+    let entry = entry.ok()?;
+    if !entry.file_type().is_file() {
+        return None;
+    }
+    let path: Utf8PathBuf = entry.path().try_into().ok()?;
+    let stem = path.file_name()?;
+    let cat_name = path.parent()?.file_name()?;
+
+    let mut cpv_str = String::with_capacity(cat_name.len() + 1 + stem.len());
+    cpv_str.push_str(cat_name);
+    cpv_str.push('/');
+    cpv_str.push_str(stem);
+    let cpv = Cpv::parse(&cpv_str).ok()?;
+
+    let result = match std::fs::read_to_string(&path) {
+        Ok(contents) => CacheEntry::parse(&contents).map_err(Error::from),
+        Err(e) => Err(util::io_err(&path, e)),
+    };
+    Some((cpv, result))
+}
+
+impl IntoIterator for CacheEntries {
+    type Item = (Cpv, Result<CacheEntry>);
+    type IntoIter = CacheEntriesIter;
+
+    fn into_iter(self) -> CacheEntriesIter {
+        CacheEntriesIter {
+            inner: self.walker.into_iter(),
+        }
+    }
+}
+
+impl Iterator for CacheEntriesIter {
+    type Item = (Cpv, Result<CacheEntry>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(item) = dir_entry_to_cache(self.inner.next()?) {
+                return Some(item);
+            }
+        }
+    }
+}
+
 /// A single package-move or slot-move entry from `profiles/updates/`.
 ///
 /// See [PMS 4.4.4](https://projects.gentoo.org/pms/9/pms.html#profiles-updates).
@@ -272,15 +333,36 @@ impl Repository {
     /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/9/pms.html#metadata-cache).
     pub fn cache_entry(&self, cpv: &Cpv) -> Result<Option<CacheEntry>> {
         let cache_path = self
-            .path
-            .join("metadata")
-            .join("md5-cache")
-            .join(cpv.to_string());
+            .cache_dir()
+            .join(cpv.cpn.category.as_str())
+            .join(format!("{}-{}", cpv.cpn.package, cpv.version));
         match std::fs::read_to_string(&cache_path) {
             Ok(contents) => Ok(Some(CacheEntry::parse(&contents)?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(util::io_err(&cache_path, e)),
         }
+    }
+
+    /// `{repo}/metadata/md5-cache/` — the directory PMS 14 places the cache in.
+    fn cache_dir(&self) -> Utf8PathBuf {
+        self.path.join("metadata").join("md5-cache")
+    }
+
+    /// Walk `metadata/md5-cache/` yielding every entry as `(Cpv, Result<CacheEntry>)`.
+    ///
+    /// The walk is parallel (via [`jwalk`]); parsing happens on demand as
+    /// the iterator is consumed. Files whose name does not parse as a Cpv
+    /// are skipped silently. I/O failures and parse errors on individual
+    /// valid-named files come through as `Err` items so the consumer can
+    /// decide whether to abort or continue.
+    ///
+    /// See [PMS 14 — Metadata Cache](https://projects.gentoo.org/pms/9/pms.html#metadata-cache).
+    pub fn cache_entries(&self) -> CacheEntries {
+        let walker = WalkDir::new(self.cache_dir())
+            .skip_hidden(true)
+            .min_depth(2)
+            .max_depth(2);
+        CacheEntries { walker }
     }
 
     /// Verify that `entry`'s recorded eclass checksums still match the live tree.
@@ -835,6 +917,55 @@ mod tests {
         let entry = repo.cache_entry(&cpv).unwrap().expect("cache file present");
         assert_eq!(entry.metadata.eapi, Eapi::Eight);
         assert_eq!(entry.metadata.description, "test");
+    }
+
+    #[test]
+    fn cache_entries_walks_md5_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+
+        let cache_root = dir.path().join("metadata").join("md5-cache");
+        std::fs::create_dir_all(cache_root.join("dev-util")).unwrap();
+        std::fs::create_dir_all(cache_root.join("sys-apps")).unwrap();
+        std::fs::write(
+            cache_root.join("dev-util").join("foo-1.0"),
+            "EAPI=8\nDESCRIPTION=foo\nSLOT=0\n",
+        )
+        .unwrap();
+        std::fs::write(
+            cache_root.join("sys-apps").join("bar-2.1"),
+            "EAPI=8\nDESCRIPTION=bar\nSLOT=0\n",
+        )
+        .unwrap();
+        // Malformed filename — should be silently skipped.
+        std::fs::write(cache_root.join("dev-util").join("not-a-cpv"), "EAPI=8\n").unwrap();
+
+        let mut entries: Vec<(String, Result<CacheEntry>)> = repo
+            .cache_entries()
+            .into_iter()
+            .map(|(cpv, r)| (cpv.to_string(), r))
+            .collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "dev-util/foo-1.0");
+        assert_eq!(entries[0].1.as_ref().unwrap().metadata.description, "foo");
+        assert_eq!(entries[1].0, "sys-apps/bar-2.1");
+        assert_eq!(entries[1].1.as_ref().unwrap().metadata.description, "bar");
+    }
+
+    #[test]
+    fn cache_entries_surfaces_parse_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = make_test_repo(&dir);
+        let cache_root = dir.path().join("metadata").join("md5-cache");
+        std::fs::create_dir_all(cache_root.join("dev-util")).unwrap();
+        // Missing mandatory DESCRIPTION etc — parse should error.
+        std::fs::write(cache_root.join("dev-util").join("foo-1.0"), "EAPI=8\n").unwrap();
+
+        let entries: Vec<_> = repo.cache_entries().into_iter().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].1.is_err());
     }
 
     #[test]

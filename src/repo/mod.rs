@@ -16,5 +16,7 @@ pub use manifest::{Manifest, ManifestEntry};
 pub use package::Package;
 pub use pkgmetadata::PkgMetadata;
 pub use profile::{Profile, ProfileDesc, ProfileStack, ProfileStatus};
-pub use repository::{Ebuilds, EbuildsIter, ProfileUpdate, Repository};
+pub use repository::{
+    CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpdate, Repository,
+};
 pub use use_expand::UseExpand;
