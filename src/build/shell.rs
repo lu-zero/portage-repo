@@ -748,7 +748,7 @@ impl EbuildShell {
     /// 3. Extract metadata variables from the shell environment
     ///
     /// See [PMS 7.2](https://projects.gentoo.org/pms/9/pms.html#mandatory-ebuilddefined-variables).
-    pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<EbuildMetadata> {
+    pub async fn source_ebuild(&mut self, ebuild: &Ebuild) -> Result<crate::source::SourcedEbuild> {
         // Set PM-provided variables
         let category = ebuild.category();
         let pn = ebuild.name();
@@ -914,13 +914,18 @@ impl EbuildShell {
 
         // CacheEntry::parse derives `inherited` from `_eclasses_`, which doesn't
         // exist yet during regen. Read the transitive list directly from the
-        // `inherit` builtin's Rust state — no bash-string parsing needed.
-        metadata.inherited = self.shell
+        // `inherit` builtin's Rust state — no bash-string parsing needed. The
+        // resolved file paths come along too so the cache writer can md5 each
+        // eclass without re-resolving the name (which would miss masters).
+        let inherited = self
+            .shell
             .builtin_state_of::<inherit::InheritCommand>("inherit")
             .map(|s| s.inherited.clone())
             .unwrap_or_default();
+        metadata.inherited = inherited.iter().map(|e| e.name.clone()).collect();
+        let eclasses = inherited.into_iter().map(|e| (e.name, e.path)).collect();
 
-        Ok(metadata)
+        Ok(crate::source::SourcedEbuild { metadata, eclasses })
     }
 
     /// Locate portage's script directory under `/usr/lib/portage`.

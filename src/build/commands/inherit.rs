@@ -70,17 +70,30 @@ pub(crate) const E_VARS_ALL: &[&str] = &[
     "E_RESTRICT",
 ];
 
+/// One sourced eclass: its name and the resolved file path it was loaded from.
+///
+/// Tracking the path is essential for cache writing/validation: an eclass may
+/// come from a master repo's `eclass/` directory rather than the local repo,
+/// and reconstructing the path from the name alone would search only the local
+/// tree.
+#[derive(Clone, Debug)]
+pub(crate) struct InheritedEclass {
+    pub(crate) name: String,
+    pub(crate) path: Utf8PathBuf,
+}
+
 /// Persistent state for the `inherit` builtin.
 ///
 /// - `inherited`: transitive list of eclasses sourced in this shell instance,
-///   used for dedup within a single ebuild.
+///   used for dedup within a single ebuild and for emitting `_eclasses_` in
+///   the metadata cache.
 /// - `cache`: a shared AST cache. All shells in a regen run share the same
 ///   underlying `papaya::HashMap` via `Arc`, so each eclass is parsed at most
 ///   once.
 #[derive(Clone)]
 pub(crate) struct InheritState {
-    /// Transitive eclass names sourced so far in this shell.
-    pub(crate) inherited: Vec<String>,
+    /// Transitive eclasses sourced so far in this shell, in inheritance order.
+    pub(crate) inherited: Vec<InheritedEclass>,
     /// Shared AST cache keyed by eclass name.
     pub(crate) cache: Arc<papaya::HashMap<String, Program>>,
 }
@@ -135,7 +148,7 @@ impl builtins::Command for InheritCommand {
         for eclass in &self.eclasses {
             let already_inherited = {
                 let state = self.state(&context)?;
-                state.inherited.contains(eclass)
+                state.inherited.iter().any(|e| &e.name == eclass)
             };
             if already_inherited {
                 if is_top_level {
@@ -223,8 +236,16 @@ impl builtins::Command for InheritCommand {
             // Update state: push this eclass and sync $INHERITED.
             {
                 let state = self.state_mut(&mut context)?;
-                state.inherited.push(eclass.clone());
-                let inherited_str = state.inherited.join(" ");
+                state.inherited.push(InheritedEclass {
+                    name: eclass.clone(),
+                    path: eclass_file.clone(),
+                });
+                let inherited_str = state
+                    .inherited
+                    .iter()
+                    .map(|e| e.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 set_var(context.shell, "INHERITED", &inherited_str);
             }
 

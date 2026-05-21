@@ -231,7 +231,7 @@ async fn main() {
                         errors.fetch_add(1, Ordering::Relaxed);
                         return;
                     }
-                    Ok(m) => m,
+                    Ok(s) => s,
                 };
 
                 let reference = match repo.cache_entry(cpv) {
@@ -248,20 +248,13 @@ async fn main() {
                     .map(|b| format!("{:x}", md5::compute(&b)))
                     .ok();
 
-                let eclass_dir = ebuild
-                    .path()
-                    .ancestors()
-                    .find(|p| p.join("eclass").is_dir())
-                    .map(|p| p.join("eclass"));
-
-                let eclasses: Vec<(String, String)> = metadata
-                    .inherited
-                    .iter()
-                    .filter_map(|name| {
-                        let path = eclass_dir.as_ref()?.join(format!("{name}.eclass"));
-                        fs::read(&path)
+                let portage_repo::source::SourcedEbuild { metadata, eclasses: eclass_paths } = metadata;
+                let eclasses: Vec<(String, String)> = eclass_paths
+                    .into_iter()
+                    .filter_map(|(name, path)| {
+                        fs::read(path.as_std_path())
                             .ok()
-                            .map(|data| (name.clone(), format!("{:x}", md5::compute(&data))))
+                            .map(|data| (name, format!("{:x}", md5::compute(&data))))
                     })
                     .collect();
 

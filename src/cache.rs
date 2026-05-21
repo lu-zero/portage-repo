@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use camino::Utf8Path;
 use portage_metadata::CacheEntry;
 
-use crate::source::{SourceContext, SourceOpts, source_parallel};
+use crate::source::{SourceContext, SourceOpts, SourcedEbuild, source_parallel};
 use crate::{Ebuild, Repository, Result};
 
 type ChecksumCache = Arc<Mutex<HashMap<PathBuf, md5::Digest>>>;
@@ -71,9 +71,9 @@ pub async fn regen_cache(
                         eprintln!("\nERROR {}: {e}", ebuild.cpv());
                         errors.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(metadata) => {
+                    Ok(sourced) => {
                         if let Some(ref dir) = out_dir {
-                            if let Err(e) = write_entry(&ebuild, metadata, dir, &checksum_cache) {
+                            if let Err(e) = write_entry(&ebuild, sourced, dir, &checksum_cache) {
                                 eprintln!("\nWRITE ERROR {}: {e}", ebuild.cpv());
                                 errors.fetch_add(1, Ordering::Relaxed);
                             }
@@ -113,30 +113,25 @@ fn eclass_md5(
 
 fn write_entry(
     ebuild: &Ebuild,
-    metadata: portage_metadata::EbuildMetadata,
+    sourced: SourcedEbuild,
     out_dir: &std::path::Path,
     checksum_cache: &ChecksumCache,
 ) -> std::result::Result<(), String> {
     let ebuild_bytes = fs::read(ebuild.path()).map_err(|e| format!("read ebuild: {e}"))?;
     let ebuild_md5 = format!("{:x}", md5::compute(&ebuild_bytes));
 
-    // Walk upward from the ebuild to find the repo root's eclass/ directory.
-    let eclass_dir = ebuild
-        .path()
-        .ancestors()
-        .find(|p| p.join("eclass").is_dir())
-        .map(|p| p.join("eclass"));
-
-    let eclasses: Vec<(String, String)> = metadata
-        .inherited
-        .iter()
-        .filter_map(|name| {
-            let path = eclass_dir.as_ref()?.join(format!("{name}.eclass"));
-            eclass_md5(&path, checksum_cache)
-                .ok()
-                .map(|d| (name.clone(), format!("{d:x}")))
+    // Md5 every eclass that was actually sourced, using its resolved path.
+    // This is path-accurate across master repos — a name-only lookup would
+    // miss eclasses inherited from a master overlay's eclass/ directory.
+    let SourcedEbuild { metadata, eclasses } = sourced;
+    let eclasses: Vec<(String, String)> = eclasses
+        .into_iter()
+        .map(|(name, path)| {
+            let digest =
+                eclass_md5(&path, checksum_cache).map_err(|e| format!("eclass {name}: {e}"))?;
+            Ok((name, format!("{digest:x}")))
         })
-        .collect();
+        .collect::<std::result::Result<_, String>>()?;
 
     let entry = CacheEntry { metadata, md5: Some(ebuild_md5), eclasses };
 

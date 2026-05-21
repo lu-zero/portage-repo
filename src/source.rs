@@ -9,9 +9,25 @@
 
 use std::sync::Arc;
 
+use camino::Utf8PathBuf;
 use portage_metadata::EbuildMetadata;
 
 use crate::{Ebuild, Repository, Result};
+
+/// Result of sourcing an ebuild.
+///
+/// Bundles the extracted metadata with the resolved file paths of every
+/// eclass that was sourced (in inheritance order). The paths come from the
+/// `inherit` builtin's own resolution against the live eclass search dirs,
+/// so they correctly reflect eclasses pulled from master repositories rather
+/// than the local repo — which a name-based lookup at write time cannot.
+#[derive(Debug, Clone)]
+pub struct SourcedEbuild {
+    /// Parsed metadata variables (DEPEND, IUSE, EAPI, …).
+    pub metadata: EbuildMetadata,
+    /// Eclasses sourced for this ebuild, paired `(name, file path)`.
+    pub eclasses: Vec<(String, Utf8PathBuf)>,
+}
 
 type AstCache = Arc<papaya::HashMap<String, brush_parser::ast::Program>>;
 
@@ -50,7 +66,7 @@ pub async fn source_parallel<F>(
     on_result: F,
 ) -> Result<()>
 where
-    F: Fn(Ebuild, Result<EbuildMetadata>) + Send + Sync + 'static,
+    F: Fn(Ebuild, Result<SourcedEbuild>) + Send + Sync + 'static,
 {
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
@@ -104,7 +120,7 @@ pub async fn source_single(
     masters: &[Repository],
     ebuild: &Ebuild,
     ctx: &SourceContext,
-) -> Result<EbuildMetadata> {
+) -> Result<SourcedEbuild> {
     let master_refs: Vec<&Repository> = masters.iter().collect();
     source_one(repo, &master_refs, ebuild, &ctx.0, false).await
 }
@@ -115,10 +131,13 @@ pub(crate) async fn source_one(
     ebuild: &Ebuild,
     ast_cache: &AstCache,
     dedup: bool,
-) -> Result<EbuildMetadata> {
+) -> Result<SourcedEbuild> {
     let mut shell = repo
         .shell_with_masters_and_cache(masters, Arc::clone(ast_cache))
         .await?;
-    let metadata = shell.source_ebuild(ebuild).await?;
-    Ok(if dedup { metadata.dedup() } else { metadata })
+    let mut sourced = shell.source_ebuild(ebuild).await?;
+    if dedup {
+        sourced.metadata = sourced.metadata.dedup();
+    }
+    Ok(sourced)
 }

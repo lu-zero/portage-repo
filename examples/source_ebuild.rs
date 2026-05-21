@@ -79,7 +79,7 @@ async fn main() {
     };
 
     let metadata = match shell.source_ebuild(&ebuild).await {
-        Ok(m) => m,
+        Ok(s) => s.metadata,
         Err(e) => {
             eprintln!("Error sourcing ebuild: {e}");
             process::exit(1);
