@@ -174,6 +174,79 @@ pub struct CacheReadOpts {
     pub latest_per_cpn: bool,
 }
 
+/// List every `(Cpv, file path)` pair found under each repo's
+/// `metadata/md5-cache/` directory.
+///
+/// Walks each repo's cache with [`jwalk`] (min_depth=2 / max_depth=2 —
+/// exactly the category/file leaves), parses the filename into a Cpv,
+/// and returns the collected pairs. No file content is read.
+///
+/// Useful as a name-only enumeration of every cached package across one
+/// or more repos. Unlike walking `profiles/categories`, this finds
+/// dynamically-created categories (e.g. crossdev's
+/// `cross-<TARGET>/`).
+///
+/// Files whose name does not parse as a Cpv are skipped silently. A cpv
+/// can appear more than once if the same package is present in multiple
+/// repos — pass [`CacheReadOpts::latest_per_cpn`] to keep only the
+/// highest-version entry per Cpn (across all repos).
+pub fn cache_cpvs(
+    repos: &[Repository],
+    opts: &CacheReadOpts,
+) -> Vec<(portage_atom::Cpv, PathBuf)> {
+    let mut items: Vec<(portage_atom::Cpv, PathBuf)> = Vec::with_capacity(32_768);
+    for repo in repos {
+        let cache_dir = repo.cache_dir();
+        let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
+            .skip_hidden(true)
+            .min_depth(2)
+            .max_depth(2);
+        for entry in walker {
+            let Ok(entry) = entry else { continue };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(stem) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(cat) = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+            else {
+                continue;
+            };
+            let mut cpv_str = String::with_capacity(cat.len() + 1 + stem.len());
+            cpv_str.push_str(cat);
+            cpv_str.push('/');
+            cpv_str.push_str(stem);
+            let Ok(cpv) = portage_atom::Cpv::parse(&cpv_str) else {
+                continue;
+            };
+            items.push((cpv, path));
+        }
+    }
+
+    if opts.latest_per_cpn && !items.is_empty() {
+        use std::collections::HashMap;
+        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf)> =
+            HashMap::with_capacity(items.len());
+        for (cpv, path) in items.drain(..) {
+            best.entry(cpv.cpn)
+                .and_modify(|(prev_cpv, prev_path)| {
+                    if cpv.version > prev_cpv.version {
+                        *prev_cpv = cpv.clone();
+                        *prev_path = path.clone();
+                    }
+                })
+                .or_insert((cpv, path));
+        }
+        items = best.into_values().collect();
+    }
+    items
+}
+
 /// Read every `md5-cache` entry across `repos` in parallel, applying
 /// `decode` to each file's text on the worker that reads it.
 ///
@@ -209,67 +282,12 @@ where
             .unwrap_or(4)
     });
 
-    // Phase 1 — discover every cache file under each repo's md5-cache dir.
-    // jwalk walks directories on its own worker pool, but the per-entry
-    // bookkeeping (file_type check, filename slicing, Cpv::parse) runs in
-    // this task. For ~30k entries that work is ~50-100ms — small enough to
-    // keep serial so we can chunk evenly in phase 2.
-    let mut items: Vec<(portage_atom::Cpv, PathBuf)> = Vec::with_capacity(32_768);
-    for repo in repos {
-        let cache_dir = repo.cache_dir();
-        let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
-            .skip_hidden(true)
-            .min_depth(2)
-            .max_depth(2);
-        for entry in walker {
-            let Ok(entry) = entry else { continue };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let Some(stem) = path.file_name().and_then(|s| s.to_str()) else {
-                continue;
-            };
-            let Some(cat) = path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-            else {
-                continue;
-            };
-            let mut cpv_str = String::with_capacity(cat.len() + 1 + stem.len());
-            cpv_str.push_str(cat);
-            cpv_str.push('/');
-            cpv_str.push_str(stem);
-            let Ok(cpv) = portage_atom::Cpv::parse(&cpv_str) else {
-                continue;
-            };
-            items.push((cpv, path));
-        }
-    }
-
+    // Phase 1 — discover (and optionally pre-dedupe) every cache file.
+    // For ~30k entries that work is ~50-100ms — small enough to keep
+    // serial so we can chunk evenly in phase 2.
+    let items = cache_cpvs(repos, opts);
     if items.is_empty() {
         return Vec::new();
-    }
-
-    // Optional pre-dedup: keep only the highest cpv per Cpn before any file
-    // is read. Cuts both the file-read/parse cost AND the post-parse drop
-    // spike when callers only care about the latest version.
-    if opts.latest_per_cpn {
-        use std::collections::HashMap;
-        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf)> =
-            HashMap::with_capacity(items.len());
-        for (cpv, path) in items.drain(..) {
-            best.entry(cpv.cpn)
-                .and_modify(|(prev_cpv, prev_path)| {
-                    if cpv.version > prev_cpv.version {
-                        *prev_cpv = cpv.clone();
-                        *prev_path = path.clone();
-                    }
-                })
-                .or_insert((cpv, path));
-        }
-        items = best.into_values().collect();
     }
 
     // Phase 2 — fan items out into `jobs` chunks, one blocking task each
