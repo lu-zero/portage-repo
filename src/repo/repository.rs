@@ -344,7 +344,7 @@ impl Repository {
     }
 
     /// `{repo}/metadata/md5-cache/` — the directory PMS 14 places the cache in.
-    fn cache_dir(&self) -> Utf8PathBuf {
+    pub(crate) fn cache_dir(&self) -> Utf8PathBuf {
         self.path.join("metadata").join("md5-cache")
     }
 

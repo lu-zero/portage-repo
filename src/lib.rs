@@ -59,5 +59,5 @@ pub use repo::{CacheEntries, CacheEntriesIter, Ebuilds, EbuildsIter, ProfileUpda
 pub use build::EbuildShell;
 pub use repo::UseExpand;
 pub use source::{SourceContext, SourceOpts, source_parallel, source_single};
-pub use cache::{RegenOpts, RegenStats, regen_cache};
+pub use cache::{CacheReadOpts, RegenOpts, RegenStats, cache_entries_parallel, regen_cache};
 pub use portage_metadata::EbuildMetadata;

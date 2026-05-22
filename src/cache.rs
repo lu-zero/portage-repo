@@ -160,3 +160,135 @@ fn write_entry(
     fs::rename(&tmp_path, &final_path).map_err(|e| format!("rename: {e}"))?;
     Ok(())
 }
+
+/// Options for [`cache_entries_parallel`].
+#[derive(Debug, Clone, Default)]
+pub struct CacheReadOpts {
+    /// Number of parallel workers. `None` uses [`std::thread::available_parallelism`].
+    pub jobs: Option<usize>,
+    /// When `true`, only the highest-cpv entry per Cpn (across all repos) is
+    /// parsed; older versions and duplicates from overlays are skipped before
+    /// any file is read. Use this when only the latest version matters
+    /// (e.g. description search) — avoids both the wasted parse work *and*
+    /// the drop spike from discarding parsed-but-deduped entries.
+    pub latest_per_cpn: bool,
+}
+
+/// Read every `md5-cache` entry across `repos` in parallel.
+///
+/// Two-phase: (1) a single jwalk pass collects `(Cpv, path)` for every
+/// well-named cache file; (2) the slice is chunked across `jobs` blocking
+/// tasks that each do `fs::read` + [`CacheEntry::parse`] end-to-end, then
+/// the per-task vectors are concatenated. No channel, no shared mutex.
+///
+/// Files whose name does not parse as a Cpv are skipped silently. I/O and
+/// parse errors on valid-named files come through as `Err` items. A cpv
+/// can appear more than once if the same package is present in multiple
+/// repos; the caller decides how to dedupe.
+pub async fn cache_entries_parallel(
+    repos: &[Repository],
+    opts: &CacheReadOpts,
+) -> Vec<(portage_atom::Cpv, Result<CacheEntry>)> {
+    let jobs = opts.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+    });
+
+    // Phase 1 — discover every cache file under each repo's md5-cache dir.
+    // jwalk walks directories on its own worker pool, but the per-entry
+    // bookkeeping (file_type check, filename slicing, Cpv::parse) runs in
+    // this task. For ~30k entries that work is ~50-100ms — small enough to
+    // keep serial so we can chunk evenly in phase 2.
+    let mut items: Vec<(portage_atom::Cpv, PathBuf)> = Vec::with_capacity(32_768);
+    for repo in repos {
+        let cache_dir = repo.cache_dir();
+        let walker = jwalk::WalkDir::new(cache_dir.as_std_path())
+            .skip_hidden(true)
+            .min_depth(2)
+            .max_depth(2);
+        for entry in walker {
+            let Ok(entry) = entry else { continue };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(stem) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(cat) = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+            else {
+                continue;
+            };
+            let mut cpv_str = String::with_capacity(cat.len() + 1 + stem.len());
+            cpv_str.push_str(cat);
+            cpv_str.push('/');
+            cpv_str.push_str(stem);
+            let Ok(cpv) = portage_atom::Cpv::parse(&cpv_str) else {
+                continue;
+            };
+            items.push((cpv, path));
+        }
+    }
+
+    if items.is_empty() {
+        return Vec::new();
+    }
+
+    // Optional pre-dedup: keep only the highest cpv per Cpn before any file
+    // is read. Cuts both the file-read/parse cost AND the post-parse drop
+    // spike when callers only care about the latest version.
+    if opts.latest_per_cpn {
+        use std::collections::HashMap;
+        let mut best: HashMap<portage_atom::Cpn, (portage_atom::Cpv, PathBuf)> =
+            HashMap::with_capacity(items.len());
+        for (cpv, path) in items.drain(..) {
+            best.entry(cpv.cpn)
+                .and_modify(|(prev_cpv, prev_path)| {
+                    if cpv.version > prev_cpv.version {
+                        *prev_cpv = cpv.clone();
+                        *prev_path = path.clone();
+                    }
+                })
+                .or_insert((cpv, path));
+        }
+        items = best.into_values().collect();
+    }
+
+    // Phase 2 — fan items out into `jobs` chunks, one blocking task each
+    // does fs::read + parse for its slice end-to-end, accumulating into a
+    // local Vec. Concat at the end. Avoids shared-mutex contention that
+    // would otherwise dominate on many-core boxes.
+    let total = items.len();
+    let chunk_size = total.div_ceil(jobs);
+    let mut handles = Vec::with_capacity(jobs);
+    for chunk in items.chunks(chunk_size) {
+        let chunk: Vec<(portage_atom::Cpv, PathBuf)> = chunk.to_vec();
+        handles.push(tokio::task::spawn_blocking(move || {
+            let mut out: Vec<(portage_atom::Cpv, Result<CacheEntry>)> =
+                Vec::with_capacity(chunk.len());
+            for (cpv, path) in chunk {
+                let result = match fs::read_to_string(&path) {
+                    Ok(text) => CacheEntry::parse(&text).map_err(crate::Error::from),
+                    Err(e) => Err(crate::Error::Io {
+                        path: path.clone(),
+                        source: e,
+                    }),
+                };
+                out.push((cpv, result));
+            }
+            out
+        }));
+    }
+
+    let mut all = Vec::with_capacity(total);
+    for h in handles {
+        if let Ok(v) = h.await {
+            all.extend(v);
+        }
+    }
+    all
+}
