@@ -51,11 +51,25 @@ impl Category {
             let entry = entry.map_err(|e| util::io_err(self.path.as_std_path(), e))?;
             // file_type() reads `d_type` from getdents() on Linux filesystems
             // that fill it in (ext4/btrfs/xfs/tmpfs), avoiding a per-entry
-            // stat(). Falls back to lstat() elsewhere.
-            let is_dir = entry
-                .file_type()
-                .map(|t| t.is_dir())
-                .unwrap_or(false);
+            // stat(). For symlinks we have to follow with metadata() — some
+            // overlays (notably crossdev) symlink their package dirs at the
+            // gentoo originals, so dropping symlinks-to-dirs here would lose
+            // those packages entirely.
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            let is_dir = if ft.is_dir() {
+                true
+            } else if ft.is_symlink() {
+                // DirEntry::metadata is lstat — won't follow. Use the free
+                // fs::metadata (stat) so we see whether the target is a dir.
+                std::fs::metadata(entry.path())
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             if !is_dir {
                 continue;
             }
