@@ -174,21 +174,35 @@ pub struct CacheReadOpts {
     pub latest_per_cpn: bool,
 }
 
-/// Read every `md5-cache` entry across `repos` in parallel.
+/// Read every `md5-cache` entry across `repos` in parallel, applying
+/// `decode` to each file's text on the worker that reads it.
 ///
 /// Two-phase: (1) a single jwalk pass collects `(Cpv, path)` for every
 /// well-named cache file; (2) the slice is chunked across `jobs` blocking
-/// tasks that each do `fs::read` + [`CacheEntry::parse`] end-to-end, then
-/// the per-task vectors are concatenated. No channel, no shared mutex.
+/// tasks that each do `fs::read` + `decode(&text)` end-to-end, then the
+/// per-task vectors are concatenated. No channel, no shared mutex.
 ///
-/// Files whose name does not parse as a Cpv are skipped silently. I/O and
-/// parse errors on valid-named files come through as `Err` items. A cpv
-/// can appear more than once if the same package is present in multiple
-/// repos; the caller decides how to dedupe.
-pub async fn cache_entries_parallel(
+/// `decode` runs on a [`tokio::task::spawn_blocking`] thread and must be
+/// `Send + Sync + Clone + 'static`. Pass [`CacheEntry::parse`] (via a
+/// thin closure) for the full atom-tree parse, or build a
+/// [`portage_metadata::RawCacheEntry`] inside the closure to extract just
+/// the fields you need (e.g. `DESCRIPTION` for a search hit) without
+/// paying for atom-tree allocations.
+///
+/// Files whose name does not parse as a Cpv are skipped silently. I/O
+/// errors and any error returned by `decode` come through as `Err`
+/// items. A cpv can appear more than once if the same package is present
+/// in multiple repos; the caller decides how to dedupe (or set
+/// [`CacheReadOpts::latest_per_cpn`] to dedupe before any file is read).
+pub async fn cache_entries_parallel<T, F>(
     repos: &[Repository],
     opts: &CacheReadOpts,
-) -> Vec<(portage_atom::Cpv, Result<CacheEntry>)> {
+    decode: F,
+) -> Vec<(portage_atom::Cpv, Result<T>)>
+where
+    T: Send + 'static,
+    F: Fn(&str) -> Result<T> + Send + Sync + Clone + 'static,
+{
     let jobs = opts.jobs.unwrap_or_else(|| {
         std::thread::available_parallelism()
             .map(|n| n.get())
@@ -267,12 +281,12 @@ pub async fn cache_entries_parallel(
     let mut handles = Vec::with_capacity(jobs);
     for chunk in items.chunks(chunk_size) {
         let chunk: Vec<(portage_atom::Cpv, PathBuf)> = chunk.to_vec();
+        let decode = decode.clone();
         handles.push(tokio::task::spawn_blocking(move || {
-            let mut out: Vec<(portage_atom::Cpv, Result<CacheEntry>)> =
-                Vec::with_capacity(chunk.len());
+            let mut out: Vec<(portage_atom::Cpv, Result<T>)> = Vec::with_capacity(chunk.len());
             for (cpv, path) in chunk {
                 let result = match fs::read_to_string(&path) {
-                    Ok(text) => CacheEntry::parse(&text).map_err(crate::Error::from),
+                    Ok(text) => decode(&text),
                     Err(e) => Err(crate::Error::Io {
                         path: path.clone(),
                         source: e,
