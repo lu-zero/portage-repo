@@ -49,15 +49,26 @@ impl Category {
         let mut packages = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| util::io_err(self.path.as_std_path(), e))?;
+            // file_type() reads `d_type` from getdents() on Linux filesystems
+            // that fill it in (ext4/btrfs/xfs/tmpfs), avoiding a per-entry
+            // stat(). Falls back to lstat() elsewhere.
+            let is_dir = entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false);
+            if !is_dir {
+                continue;
+            }
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy();
             if name.starts_with('.') || name == "CVS" {
                 continue;
             }
-            let path: Utf8PathBuf = entry.path().try_into().ok().unwrap_or_default();
-            if path.is_dir() {
-                packages.push(Package::new(&self.name, name.into_owned(), path));
-            }
+            let path: Utf8PathBuf = match entry.path().try_into() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            packages.push(Package::new(&self.name, name.into_owned(), path));
         }
         packages.sort_by(|a, b| a.name().cmp(b.name()));
         Ok(packages)
